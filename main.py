@@ -773,6 +773,9 @@ def clamp01(x: float) -> float:
 def now_iso() -> str:
     return _dt.datetime.utcnow().replace(tzinfo=_dt.timezone.utc).isoformat()
 
+def now_ts() -> int:
+    return int(_dt.datetime.utcnow().replace(tzinfo=_dt.timezone.utc).timestamp())
+
 
 def parse_int(s: str, default: int = 0) -> int:
     try:
@@ -2230,6 +2233,31 @@ def create_tables():
         )""")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_x2_labels_time ON x2_labels(user_id, created_at)")
 
+        cursor.execute("""CREATE TABLE IF NOT EXISTS x2_blacklist (
+            user_id INTEGER NOT NULL,
+            tid TEXT NOT NULL,
+            reason TEXT,
+            pattern TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(user_id, tid),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_x2_blacklist_time ON x2_blacklist(user_id, created_at)")
+
+        cursor.execute("""CREATE TABLE IF NOT EXISTS x2_jailbreak_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            tid TEXT,
+            src TEXT,
+            reason TEXT,
+            pattern TEXT,
+            text_excerpt TEXT,
+            weaviate_payload TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_x2_jailbreak_time ON x2_jailbreak_log(user_id, created_at)")
+
         cursor.execute("""CREATE TABLE IF NOT EXISTS x2_posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -2241,6 +2269,45 @@ def create_tables():
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         )""")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_x2_posts_time ON x2_posts(user_id, created_at)")
+
+        cursor.execute("""CREATE TABLE IF NOT EXISTS x_media_objects (
+            media_id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            filename_enc TEXT,
+            mime_enc TEXT,
+            size_bytes INTEGER NOT NULL,
+            meta_enc TEXT,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_x_media_objects_exp ON x_media_objects(expires_at)")
+
+        cursor.execute("""CREATE TABLE IF NOT EXISTS x_media_chunks (
+            user_id INTEGER NOT NULL,
+            media_id TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            data_enc TEXT NOT NULL,
+            pass_num INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            PRIMARY KEY(user_id, media_id, chunk_index),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_x_media_chunks_exp ON x_media_chunks(expires_at)")
+
+        cursor.execute("""CREATE TABLE IF NOT EXISTS x_cache_bucket (
+            user_id INTEGER NOT NULL,
+            cache_key TEXT NOT NULL,
+            data_enc TEXT NOT NULL,
+            pass_num INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            PRIMARY KEY(user_id, cache_key),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_x_cache_bucket_exp ON x_cache_bucket(expires_at)")
 
         db.commit()
     print("Database tables created and verified successfully.")
@@ -2750,13 +2817,112 @@ def x2_unlabeled_ids(owner_user_id: int, limit: int = 24) -> List[str]:
     uid = int(owner_user_id)
     with _x2_db() as conn:
         rows = conn.execute(
-            "SELECT t.tid FROM x2_tweets t LEFT JOIN x2_labels l "
-            "ON t.user_id=l.user_id AND t.tid=l.tid "
-            "WHERE t.user_id=? AND l.tid IS NULL "
+            "SELECT t.tid FROM x2_tweets t "
+            "LEFT JOIN x2_labels l ON t.user_id=l.user_id AND t.tid=l.tid "
+            "LEFT JOIN x2_blacklist b ON t.user_id=b.user_id AND t.tid=b.tid "
+            "WHERE t.user_id=? AND l.tid IS NULL AND b.tid IS NULL "
             "ORDER BY t.inserted_at DESC LIMIT ?",
             (uid, int(limit)),
         ).fetchall()
     return [str(r[0]) for r in rows or []]
+
+
+_PHF_JAILBREAK_PHRASES = [
+    "ignore previous instructions",
+    "system prompt",
+    "developer message",
+    "jailbreak",
+    "do not follow",
+    "you are not bound",
+    "bypass",
+    "disable safety",
+    "reveal hidden",
+    "prompt injection",
+    "policy override",
+    "act as",
+    "DAN",
+    "roleplay as",
+    "unfiltered",
+    "no restrictions",
+    "chain of thought",
+    "exfiltrate",
+    "leak",
+]
+_PHF_JAILBREAK_HASHES = {hashlib.sha256(p.lower().encode("utf-8")).hexdigest(): p for p in _PHF_JAILBREAK_PHRASES}
+
+def _phf_scan_jailbreak(text: str) -> list[dict]:
+    """PHF-style scan: hashed phrase lookup + simple heuristics."""
+    if not text:
+        return []
+    lowered = text.lower()
+    hits: list[dict] = []
+    for phrase in _PHF_JAILBREAK_PHRASES:
+        if phrase.lower() in lowered:
+            h = hashlib.sha256(phrase.lower().encode("utf-8")).hexdigest()
+            hits.append({"pattern": phrase, "hash": h, "reason": "phrase_match"})
+    # simple heuristic for prompt injection markers
+    if re.search(r"\b(ignore|bypass|override)\b.*\b(instructions|policy|safety)\b", lowered):
+        hits.append({"pattern": "heuristic_override", "hash": "heuristic", "reason": "heuristic"})
+    return hits
+
+def _x2_blacklist_tweet(uid: int, tid: str, src: str, text: str, hit: dict) -> None:
+    tid = clean_text(tid, 64)
+    if not tid:
+        return
+    reason = clean_text(hit.get("reason", "jailbreak") or "jailbreak", 120)
+    pattern = clean_text(hit.get("pattern", "") or "", 120)
+    created_at = now_iso()
+    excerpt = clean_text(text or "", 500)
+    weaviate_payload = {
+        "tid": tid,
+        "pattern": pattern,
+        "reason": reason,
+        "excerpt": excerpt,
+        "src": clean_text(src or "", 24),
+        "created_at": created_at,
+    }
+    with _x2_db() as conn:
+        conn.execute(
+            """INSERT INTO x2_blacklist(user_id, tid, reason, pattern, created_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(user_id, tid) DO UPDATE SET
+                 reason=excluded.reason,
+                 pattern=excluded.pattern,
+                 created_at=excluded.created_at""",
+            (uid, tid, reason, pattern, created_at),
+        )
+        conn.execute(
+            """INSERT INTO x2_jailbreak_log
+               (user_id, tid, src, reason, pattern, text_excerpt, weaviate_payload, created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                uid,
+                tid,
+                clean_text(src or "", 24),
+                reason,
+                pattern,
+                excerpt,
+                json.dumps(weaviate_payload, ensure_ascii=False),
+                created_at,
+            ),
+        )
+        conn.commit()
+
+def _x2_scan_and_blacklist(uid: int, tweets: list[dict]) -> dict:
+    flagged = []
+    for t in tweets or []:
+        tid = clean_text(str(t.get("tid", "") or ""), 64)
+        text = clean_text(str(t.get("text", "") or ""), 8000)
+        if not tid or not text:
+            continue
+        hits = _phf_scan_jailbreak(text)
+        if not hits:
+            continue
+        src = clean_text(str(t.get("src", "") or ""), 24)
+        for hit in hits[:3]:
+            _x2_blacklist_tweet(uid, tid, src, text, hit)
+        flagged.append({"tid": tid, "hits": hits})
+    return {"count": len(flagged), "flagged": flagged}
 
 
 def x2_upsert_label(owner_user_id: int, tid: str, obj: Dict[str, Any], model: str = "") -> None:
@@ -3110,9 +3276,10 @@ def _x2_build_carousel(owner_user_id: int, timebox_s: float = 0.0, limit: int = 
         rows = conn.execute(
             "SELECT t.tid,t.author,t.created_at,t.text,t.src,t.inserted_at,"
             "l.neg,l.sar,l.tone,l.edu,l.truth,l.cool,l.click,l.incl,l.ext,l.summary,l.tags_json,l.title "
-            "FROM x2_tweets t JOIN x2_labels l "
-            "ON t.user_id=l.user_id AND t.tid=l.tid "
-            "WHERE t.user_id=? "
+            "FROM x2_tweets t "
+            "JOIN x2_labels l ON t.user_id=l.user_id AND t.tid=l.tid "
+            "LEFT JOIN x2_blacklist b ON t.user_id=b.user_id AND t.tid=b.tid "
+            "WHERE t.user_id=? AND b.tid IS NULL "
             "ORDER BY t.inserted_at DESC LIMIT 900",
             (uid,),
         ).fetchall()
@@ -3993,9 +4160,11 @@ def blog_admin():
     a{color:#eaf5ff}
     .post-item{display:block;padding:10px;border-radius:12px;margin-bottom:8px;text-decoration:none;border:1px solid #ffffff18;background:#ffffff08}
     .post-item:hover{background:#ffffff10}
+    {{ topbar_css|safe }}
   </style>
 </head>
 <body>
+  {{ topbar_html|safe }}
   <input type="hidden" id="csrf_token" value="{{ csrf_token }}">
 
   <div class="wrap">
@@ -4234,6 +4403,8 @@ def blog_admin():
         """,
         csrf_token=csrf_token,
         items=items,
+        topbar_css=_TOPBAR_CSS,
+        topbar_html=build_topbar_html("settings"),
     )
 
 def _admin_csrf_guard():
@@ -4261,6 +4432,57 @@ def _safe_url_for(endpoint: str) -> Optional[str]:
         return url_for(endpoint)
     except BuildError:
         return None
+
+_TOPBAR_CSS = """
+.topbar-global{
+  display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+  padding:12px 18px; margin:12px auto 0; max-width:1200px;
+  border-radius:18px; border:1px solid rgba(255,255,255,.12);
+  background: linear-gradient(135deg, rgba(8,12,24,.75), rgba(16,26,48,.65));
+  box-shadow: 0 12px 30px rgba(0,0,0,.25);
+}
+.topbar-global .brand{
+  display:flex; align-items:center; gap:10px; font-weight:800; letter-spacing:.4px;
+}
+.topbar-global .brand-badge{
+  width:34px; height:34px; border-radius:12px;
+  background: conic-gradient(from 210deg, #60A5FA, #34D399, #F472B6, #FBBF24, #60A5FA);
+  box-shadow: 0 8px 18px rgba(0,0,0,.25);
+}
+.topbar-global nav{display:flex; gap:10px; flex-wrap:wrap;}
+.topbar-global a{
+  color:#EAF0FF; text-decoration:none; font-size:13px; padding:6px 10px;
+  border-radius:999px; border:1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.04);
+}
+.topbar-global a.active{
+  border-color: rgba(96,165,250,.6);
+  box-shadow: inset 0 0 0 1px rgba(96,165,250,.35);
+}
+"""
+
+def build_topbar_html(active: str = "") -> str:
+    links = [
+        ("home", "Home", "home"),
+        ("x", "XAI Feed", "x_dashboard"),
+        ("weather", "Weather", "x_dashboard"),
+        ("chatbot", "Chatbot", "x_tromodel"),
+        ("settings", "Settings", "x_settings"),
+        ("login", "Login", "login"),
+        ("register", "Register", "register"),
+    ]
+    nav_links = []
+    for key, label, endpoint in links:
+        href = _safe_url_for(endpoint) or "#"
+        cls = "active" if key == active else ""
+        nav_links.append(f'<a class="{cls}" href="{href}">{label}</a>')
+    nav_html = "".join(nav_links)
+    return (
+        '<div class="topbar-global">'
+        '<div class="brand"><span class="brand-badge"></span><span>AX Scanner</span></div>'
+        f"<nav>{nav_html}</nav>"
+        "</div>"
+    )
 
 @app.post("/admin/blog/api/get")
 def admin_blog_api_get():
@@ -4852,6 +5074,38 @@ def overwrite_entropy_logs_by_passnum(cursor, pass_num: int, passes: int = 7):
         vals = _values_for_types(col_types, pattern)
         cursor.execute(sql, (*vals, pass_num))
         logger.debug("Pass %d complete for entropy_logs (pass_num).", i)
+
+def overwrite_x_media_by_expiry(cursor, expiration_ts: int, passes: int = 7):
+    sql_chunks = "UPDATE x_media_chunks SET data_enc=?, pass_num=? WHERE expires_at <= ?"
+    sql_objects = "UPDATE x_media_objects SET meta_enc=?, filename_enc=?, mime_enc=? WHERE expires_at <= ?"
+    for i in range(1, passes + 1):
+        noise = base64.b64encode(os.urandom(64)).decode("utf-8")
+        cursor.execute(sql_chunks, (noise, i, int(expiration_ts)))
+        cursor.execute(sql_objects, (noise, noise, noise, int(expiration_ts)))
+        logger.debug("Pass %d complete for x_media_* (expires_at<=).", i)
+
+def overwrite_x_cache_by_expiry(cursor, expiration_ts: int, passes: int = 7):
+    sql = "UPDATE x_cache_bucket SET data_enc=?, pass_num=? WHERE expires_at <= ?"
+    for i in range(1, passes + 1):
+        noise = base64.b64encode(os.urandom(64)).decode("utf-8")
+        cursor.execute(sql, (noise, i, int(expiration_ts)))
+        logger.debug("Pass %d complete for x_cache_bucket (expires_at<=).", i)
+
+def overwrite_x_media_by_user(cursor, user_id: int, passes: int = 7):
+    sql_chunks = "UPDATE x_media_chunks SET data_enc=?, pass_num=? WHERE user_id = ?"
+    sql_objects = "UPDATE x_media_objects SET meta_enc=?, filename_enc=?, mime_enc=? WHERE user_id = ?"
+    for i in range(1, passes + 1):
+        noise = base64.b64encode(os.urandom(64)).decode("utf-8")
+        cursor.execute(sql_chunks, (noise, i, int(user_id)))
+        cursor.execute(sql_objects, (noise, noise, noise, int(user_id)))
+        logger.debug("Pass %d complete for x_media_* (user_id=%s).", i, user_id)
+
+def overwrite_x_cache_by_user(cursor, user_id: int, passes: int = 7):
+    sql = "UPDATE x_cache_bucket SET data_enc=?, pass_num=? WHERE user_id = ?"
+    for i in range(1, passes + 1):
+        noise = base64.b64encode(os.urandom(64)).decode("utf-8")
+        cursor.execute(sql, (noise, i, int(user_id)))
+        logger.debug("Pass %d complete for x_cache_bucket (user_id=%s).", i, user_id)
         
 def _dynamic_argon2_hasher():
 
@@ -5113,6 +5367,7 @@ def delete_expired_data():
         return 1 if re.search(pattern, item) else 0
     while True:
         expiration_str = (datetime.utcnow() - timedelta(hours=EXPIRATION_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
+        expiration_ts = now_ts()
         try:
             with sqlite3.connect(DB_FILE) as db:
                 db.row_factory = sqlite3.Row
@@ -5141,6 +5396,31 @@ def delete_expired_data():
                     logger.debug("entropy_logs purged: %s", ids)
                 else:
                     logger.warning("entropy_logs skipped - missing columns: %s", req_e - entropy_cols)
+
+                cur.execute("PRAGMA table_info(x_media_objects)")
+                media_cols = {r["name"] for r in cur.fetchall()}
+                req_m = {"media_id","user_id","expires_at"}
+                if req_m.issubset(media_cols):
+                    cur.execute("SELECT media_id FROM x_media_objects WHERE expires_at<=?", (expiration_ts,))
+                    mids = [r["media_id"] for r in cur.fetchall()]
+                    overwrite_x_media_by_expiry(cur, expiration_ts, passes=7)
+                    cur.execute("DELETE FROM x_media_chunks WHERE expires_at<=?", (expiration_ts,))
+                    cur.execute("DELETE FROM x_media_objects WHERE expires_at<=?", (expiration_ts,))
+                    logger.debug("x_media purged: %s", mids)
+                else:
+                    logger.warning("x_media skipped - missing columns: %s", req_m - media_cols)
+
+                cur.execute("PRAGMA table_info(x_cache_bucket)")
+                cache_cols = {r["name"] for r in cur.fetchall()}
+                req_c = {"user_id","cache_key","expires_at"}
+                if req_c.issubset(cache_cols):
+                    cur.execute("SELECT cache_key FROM x_cache_bucket WHERE expires_at<=?", (expiration_ts,))
+                    keys = [r["cache_key"] for r in cur.fetchall()]
+                    overwrite_x_cache_by_expiry(cur, expiration_ts, passes=7)
+                    cur.execute("DELETE FROM x_cache_bucket WHERE expires_at<=?", (expiration_ts,))
+                    logger.debug("x_cache purged: %s", keys)
+                else:
+                    logger.warning("x_cache skipped - missing columns: %s", req_c - cache_cols)
                 db.commit()
             try:
                 with sqlite3.connect(DB_FILE) as db:
@@ -5168,6 +5448,13 @@ def delete_user_data(user_id):
 
             overwrite_entropy_logs_by_passnum(cursor, user_id, passes=7)
             cursor.execute("DELETE FROM entropy_logs WHERE pass_num = ?", (user_id, ))
+
+            overwrite_x_media_by_user(cursor, user_id, passes=7)
+            cursor.execute("DELETE FROM x_media_chunks WHERE user_id = ?", (user_id, ))
+            cursor.execute("DELETE FROM x_media_objects WHERE user_id = ?", (user_id, ))
+
+            overwrite_x_cache_by_user(cursor, user_id, passes=7)
+            cursor.execute("DELETE FROM x_cache_bucket WHERE user_id = ?", (user_id, ))
 
             db.commit()
             logger.debug(f"Securely deleted all data for user_id {user_id}")
@@ -7855,9 +8142,11 @@ def login():
             0% { transform: translateX(-60%); }
             100% { transform: translateX(60%); }
         }
+        {{ topbar_css|safe }}
     </style>
 </head>
 <body>
+    {{ topbar_html|safe }}
     <nav class="navbar navbar-expand-lg navbar-dark">
         <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
         <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" 
@@ -7923,7 +8212,10 @@ def login():
 </html>
     """,
         form=form,
-        error_message=error_message)
+        error_message=error_message,
+        topbar_css=_TOPBAR_CSS,
+        topbar_html=build_topbar_html("login"),
+    )
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -8124,9 +8416,12 @@ def register():
             0% { transform: translateX(-60%); }
             100% { transform: translateX(60%); }
         }
+        {{ topbar_css|safe }}
     </style>
 </head>
 <body>
+    
+    {{ topbar_html|safe }}
     
     <nav class="navbar navbar-expand-lg navbar-dark">
         <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
@@ -8250,7 +8545,13 @@ def register():
     </script>
 </body>
 </html>
-    """, form=form, error_message=error_message, registration_enabled=registration_enabled)
+    """,
+        form=form,
+        error_message=error_message,
+        registration_enabled=registration_enabled,
+        topbar_css=_TOPBAR_CSS,
+        topbar_html=build_topbar_html("register"),
+    )
 
 @app.post('/api/invite_lottery')
 def invite_lottery():
@@ -8414,10 +8715,11 @@ def settings():
         .invite-codes { margin-top:20px; }
         .invite-code { background:#2c2c2c; padding:10px; border-radius:5px; margin-bottom:5px; font-family:'Courier New', Courier, monospace; }
         @media (max-width:768px){ .sidebar{width:60px;} .sidebar a{padding:15px 10px; text-align:center;} .sidebar a span{display:none;} .content{margin-left:60px;} }
+        {{ topbar_css|safe }}
     </style>
 </head>
 <body>
-
+    {{ topbar_html|safe }}
     <div class="sidebar">
         <div class="navbar-brand">QRS</div>
         <a href="{{ url_for('dashboard') }}" class="nav-link {% if active_page == 'dashboard' %}active{% endif %}">
@@ -8534,7 +8836,10 @@ def settings():
         reg_enabled_ui=reg_enabled_ui,
         use_grok_ui=use_grok_ui,
         use_chatgpt_ui=use_chatgpt_ui,
-        dual_readings_ui=dual_readings_ui)
+        dual_readings_ui=dual_readings_ui,
+        topbar_css=_TOPBAR_CSS,
+        topbar_html=build_topbar_html("settings"),
+    )
 
 
 
@@ -8725,9 +9030,11 @@ def view_report(report_id):
                 line-height: 20px;
             }
         }
+        {{ topbar_css|safe }}
     </style>
 </head>
 <body>
+{{ topbar_html|safe }}
 <div id="view-report-container">
     <div class="container mt-5">
         <div class="report-container">
@@ -9023,7 +9330,9 @@ def view_report(report_id):
                                   report=report,
                                   report_html_escaped=report_html_escaped,
                                   csrf_token=csrf_token,
-                                  wheel_color=wheel_color)
+                                  wheel_color=wheel_color,
+                                  topbar_css=_TOPBAR_CSS,
+                                  topbar_html=build_topbar_html("x"))
 
 
 @app.route('/dashboard', methods=['GET', 'POST'])
@@ -9965,7 +10274,7 @@ def x_dashboard():
     }
     .field{display:flex; flex-direction:column; gap:6px; margin:10px 0;}
     label{font-size:12px; color:var(--muted);}
-    input, textarea{
+    input, textarea, select{
       width:100%; padding:10px 12px; border-radius: 14px;
       background: rgba(5,8,16,.55);
       border:1px solid rgba(255,255,255,.12);
@@ -10005,9 +10314,59 @@ def x_dashboard():
       background: linear-gradient(120deg, rgba(96,165,250,.22), rgba(52,211,153,.18));
       border:1px solid rgba(96,165,250,.22);
     }
+    .pipeline{display:grid; gap:10px;}
+    .stage{
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      padding:10px 12px; border-radius:14px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      font-size:12px; color:var(--muted);
+    }
+    .stage b{color:var(--txt); font-size:13px;}
+    .tag{
+      padding:4px 8px; border-radius:999px; font-size:11px;
+      border:1px solid rgba(255,255,255,.16); color:var(--muted);
+    }
+    .tag.live{color:#34d399; border-color: rgba(52,211,153,.45);}
+    .tag.wait{color:#fbbf24; border-color: rgba(251,191,36,.45);}
+    .tag.off{color:#fb7185; border-color: rgba(251,113,133,.45);}
+    .prompt-grid{display:grid; gap:12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));}
+    .prompt-card{
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(5,8,16,.55);
+      padding:12px; border-radius:14px;
+      display:flex; flex-direction:column; gap:8px;
+    }
+    .prompt-card code{
+      display:block; white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas;
+      color:#e2e8f0; font-size:12px;
+    }
+    .copy-btn{
+      align-self:flex-start;
+      padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.16);
+      background: rgba(255,255,255,.06); color:var(--txt); font-size:12px; cursor:pointer;
+    }
+    .stack{display:grid; gap:8px;}
+    .swatches{display:flex; gap:8px; flex-wrap:wrap;}
+    .swatch{
+      width:34px; height:34px; border-radius:12px; border:1px solid rgba(255,255,255,.12);
+      box-shadow: 0 10px 20px rgba(0,0,0,.35);
+    }
+    .mini{
+      font-size:11px; color:var(--muted);
+    }
+    .blurred{
+      filter: blur(6px);
+      transition: filter .2s ease;
+    }
+    .reveal{
+      filter: blur(0);
+    }
+    {{ topbar_css|safe }}
   </style>
 </head>
 <body>
+  {{ topbar_html|safe }}
   <div class="wrap">
     <div class="topbar">
       <div class="brand">
@@ -10020,6 +10379,7 @@ def x_dashboard():
       <div class="navmini">
         <a href="/x">AX Dashboard</a>
         <a href="/x/settings">XAI Settings</a>
+        <a href="/x/tromodel">Tri-Model Chat</a>
         <a href="/logout">Logout</a>
       </div>
       <div class="row">
@@ -10061,24 +10421,11 @@ def x_dashboard():
           <div class="hr"></div>
 
           <div class="field">
-            <label>Settings (stored in your PQ-hybrid vault)</label>
-            <input id="xUser" placeholder="X user id" value="{{ x_user }}"/>
-            <input id="xBearer" placeholder="X bearer token" value="{{ x_bearer_mask }}" />
-            <input id="oaiKey" placeholder="OpenAI API key" value="{{ oai_key_mask }}" />
-            <input id="oaiModel" placeholder="OpenAI model" value="{{ oai_model }}" />
+            <label>Settings moved to XAI Settings</label>
             <div class="row">
-              <button class="btn" id="btnSave">Save settings</button>
-              <button class="btn danger" id="btnClearSecrets">Clear secrets</button>
+              <a class="btn primary" href="/x/settings">Open settings</a>
+              <span class="small">Manage X feed, OpenAI, weather, and model preferences in one place.</span>
             </div>
-            <div class="small">Tip: paste full secrets; they’ll be stored encrypted. This page only shows masked values.</div>
-          </div>
-
-          <div class="field">
-            <label>Weather Scanner (lat/lon stored per user)</label>
-            <input id="weatherLat" placeholder="Latitude" value="{{ weather_lat }}"/>
-            <input id="weatherLon" placeholder="Longitude" value="{{ weather_lon }}"/>
-            <input id="weatherLabel" placeholder="Location label (optional)" value="{{ weather_label }}"/>
-            <div class="small">Add coordinates to fuse live weather into the carousel.</div>
           </div>
 
           <div class="status" id="status">Ready.</div>
@@ -10086,13 +10433,55 @@ def x_dashboard():
       </div>
 
       <div class="card">
+        <h3>Risk Scanner Pipeline</h3>
+        <div class="body">
+          <div class="small">Pipeline the risk scanner into the X dashboard lattice for consistent scoring + tri-LLM consensus.</div>
+          <div class="hr"></div>
+          <div class="pipeline">
+            <div class="stage">
+              <div><b>Ingest</b><div class="mini">X stream → topic filters → SSR cache</div></div>
+              <span class="tag live">live</span>
+            </div>
+            <div class="stage">
+              <div><b>Weaviate Embed</b><div class="mini">vectorize posts + route context + safety hints</div></div>
+              <span class="tag wait">queued</span>
+            </div>
+            <div class="stage">
+              <div><b>Tri-LLM Vote</b><div class="mini">OpenAI • Grok • Llama (local)</div></div>
+              <span class="tag live">sync</span>
+            </div>
+            <div class="stage">
+              <div><b>Risk Dial</b><div class="mini">harm → urgency → driver calm overlay</div></div>
+              <span class="tag wait">staged</span>
+            </div>
+            <div class="stage">
+              <div><b>Carousel Output</b><div class="mini">colorized summary + tags + replay dwell</div></div>
+              <span class="tag live">ready</span>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="chipset">
+            <div class="chip">Route risk lanes</div>
+            <div class="chip">Evidence traces</div>
+            <div class="chip">Anomaly heat</div>
+            <div class="chip">Trust decay</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <h3>Carousel</h3>
         <div class="tweet">
           <div class="meta" id="meta">—</div>
-          <div class="text" id="text">No items yet. Fetch → Label → Build.</div>
-          <div class="bars" id="bars"></div>
+          <div class="text blurred" id="text">No items yet. Fetch → Label → Build.</div>
+          <div class="bars blurred" id="bars"></div>
           <div class="hr"></div>
-          <div class="small" id="summary"></div>
+          <div class="small blurred" id="summary"></div>
+          <div class="hr"></div>
+          <div class="row">
+            <button class="btn" id="btnReveal">Reveal preview</button>
+            <span class="small" id="previewStatus">Safe preview enabled</span>
+          </div>
         </div>
       </div>
       <div class="card">
@@ -10105,21 +10494,178 @@ def x_dashboard():
           </div>
         </div>
       </div>
+
       <div class="card">
-        <h3>X Feed Next Ideas</h3>
+        <h3>Presentation Modes</h3>
         <div class="body">
-          <div class="small">
-            <ol style="padding-left:18px; margin:0;">
-              <li><strong>Route pulse matching:</strong> boost tweets that mention the active route corridor or waypoints.</li>
-              <li><strong>Hazard authority weighting:</strong> score posts higher when they cite DOT, weather, or responder sources.</li>
-              <li><strong>Signal decay lanes:</strong> auto-archive items as they age, with a recency shelf for live alerts.</li>
-              <li><strong>Driver calm mode:</strong> soften language + color for high stress windows to reduce panic.</li>
-            </ol>
+          <div class="small">Switch how posts are displayed: reels, mosaics, or timelines. Each mode tunes dwell + layout.</div>
+          <div class="hr"></div>
+          <div class="row">
+            <button class="btn" id="modeReel">Reel mode</button>
+            <button class="btn" id="modeMosaic">Mosaic mode</button>
+            <button class="btn" id="modeTimeline">Timeline mode</button>
+          </div>
+          <div class="small" id="modeStatus" style="margin-top:10px;">Active mode: carousel</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Prompt Forge (Tri-LLM)</h3>
+        <div class="body">
+          <div class="small">New prompts tuned for OpenAI, Grok, and Local Llama to expand the X dashboard signal surface.</div>
+          <div class="hr"></div>
+          <div class="prompt-grid">
+            <div class="prompt-card">
+              <strong>OpenAI • Colorize X Posts</strong>
+              <code data-prompt="openai">You are the Color Weave engine. Map each post to a 3-stop gradient (primary, accent, glow) based on emotion + risk + novelty. Output JSON with {primary, accent, glow, rationale, tags}.</code>
+              <button class="copy-btn" data-copy="openai">Copy prompt</button>
+            </div>
+            <div class="prompt-card">
+              <strong>Grok • Color Mixing Lab</strong>
+              <code data-prompt="grok">You are the X spectrum mixer. Blend route risk signals into a single chroma recipe: {base_hex, highlight_hex, pulse_hex, mixing_notes}. Ensure contrast for night mode and emphasize urgent posts.</code>
+              <button class="copy-btn" data-copy="grok">Copy prompt</button>
+            </div>
+            <div class="prompt-card">
+              <strong>Llama • Find New Posts</strong>
+              <code data-prompt="llama">You are the discovery sweeper. Suggest 6 query strings that surface fresh, high-signal posts for the current corridor. Output JSON list of {query, rationale, freshness_window}.</code>
+              <button class="copy-btn" data-copy="llama">Copy prompt</button>
+            </div>
           </div>
           <div class="hr"></div>
-          <div class="small">
-            Set <span class="kbd">RGN_X_TEST_API=synthetic</span> or a test URL to inject synthetic feed data for validation.
+          <div class="small">Prompt outputs feed the pipeline cards above and sync with carousel color tags.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Weaviate Embed Lab</h3>
+        <div class="body">
+          <div class="stack">
+            <div class="small">Embed X posts into Weaviate-style vectors for clustering, recency search, and risk triangulation.</div>
+            <div class="row">
+              <span class="pill">Index: <span class="kbd">x_posts_v2</span></span>
+              <span class="pill">Distance: <span class="kbd">cosine</span></span>
+              <span class="pill">TopK: <span class="kbd">48</span></span>
+            </div>
+            <div class="hr"></div>
+            <div class="chipset">
+              <div class="chip">Auto-embed on ingest</div>
+              <div class="chip">Route anchor vectors</div>
+              <div class="chip">Recall high-signal clusters</div>
+              <div class="chip">Rerank with safety tags</div>
+            </div>
+            <div class="small">Use embeddings to drive risk scanner hints + carousel ordering.</div>
           </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Color Mixer</h3>
+        <div class="body">
+          <div class="small">Colorize posts based on sentiment, urgency, and novelty. Blend palettes for the X AI dashboard.</div>
+          <div class="hr"></div>
+          <div class="swatches">
+            <div class="swatch" style="background:#60A5FA;"></div>
+            <div class="swatch" style="background:#34D399;"></div>
+            <div class="swatch" style="background:#F472B6;"></div>
+            <div class="swatch" style="background:#FBBF24;"></div>
+            <div class="swatch" style="background:#22D3EE;"></div>
+            <div class="swatch" style="background:#A78BFA;"></div>
+          </div>
+          <div class="hr"></div>
+          <div class="chipset">
+            <div class="chip">Risk → Warmth shift</div>
+            <div class="chip">Novelty → Glow boost</div>
+            <div class="chip">Negativity → Saturation clamp</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Discovery Radar</h3>
+        <div class="body">
+          <div class="small">Continuous scouting for new posts, reply spikes, and emergent topics.</div>
+          <div class="hr"></div>
+          <div class="pipeline">
+            <div class="stage">
+              <div><b>New posts sweep</b><div class="mini">minute-level scanning for corridor mentions</div></div>
+              <span class="tag live">armed</span>
+            </div>
+            <div class="stage">
+              <div><b>Reply storm watch</b><div class="mini">detect fast-moving conversational spikes</div></div>
+              <span class="tag wait">warming</span>
+            </div>
+            <div class="stage">
+              <div><b>Topic drift</b><div class="mini">monitor sentiment + risk delta per hour</div></div>
+              <span class="tag off">idle</span>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="small">Insights flow into the carousel tags and risk lane weighting.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Pennylane Quantum Studio</h3>
+        <div class="body">
+          <div class="small">Entropic gain tracking for quantum risk lifts. Ideal for multi-model consensus monitoring.</div>
+          <div class="hr"></div>
+          <div class="pipeline">
+            <div class="stage">
+              <div><b>Qubit lattice</b><div class="mini">5-wire pennylane circuit seeded by signal entropy</div></div>
+              <span class="tag live">pennylane</span>
+            </div>
+            <div class="stage">
+              <div><b>Entropic gain</b><div class="mini">ΔH over last 12 scans to calibrate risk volatility</div></div>
+              <span class="tag wait">queue</span>
+            </div>
+            <div class="stage">
+              <div><b>Quantum vote</b><div class="mini">weight tri-LLM decisions with entropy multiplier</div></div>
+              <span class="tag live">armed</span>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="chipset">
+            <div class="chip">qml probs</div>
+            <div class="chip">entropy score</div>
+            <div class="chip">risk drift</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Post Grabber</h3>
+        <div class="body">
+          <div class="small">Road-aware X post capture with burst control and corridor filtering.</div>
+          <div class="hr"></div>
+          <div class="pipeline">
+            <div class="stage">
+              <div><b>Topic sweeps</b><div class="mini">rotate queries by region + timebox</div></div>
+              <span class="tag live">live</span>
+            </div>
+            <div class="stage">
+              <div><b>Risk gate</b><div class="mini">filter noise before labeling to reduce 401 bursts</div></div>
+              <span class="tag wait">queued</span>
+            </div>
+            <div class="stage">
+              <div><b>Fetch throttle</b><div class="mini">stagger requests across user &amp; topic lanes</div></div>
+              <span class="tag live">steady</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Media Vault (Encrypted)</h3>
+        <div class="body">
+          <div class="small">Securely cache images/videos without Pillow. Chunks are PQ-sealed and stored per user.</div>
+          <div class="hr"></div>
+          <div class="chipset">
+            <div class="chip">chunked upload</div>
+            <div class="chip">AES-GCM + PQ wrap</div>
+            <div class="chip">7-pass delete</div>
+            <div class="chip">bucket cache</div>
+          </div>
+          <div class="small" style="margin-top:10px;">Use the media endpoints to store assets for carousel cards and tri-model chat avatars.</div>
         </div>
       </div>
     </div>
@@ -10136,11 +10682,16 @@ def x_dashboard():
   const elBars = document.getElementById('bars');
   const elSummary = document.getElementById('summary');
   const elWeatherChips = document.getElementById('weatherChips');
+  const elPreviewStatus = document.getElementById('previewStatus');
+  const elModeStatus = document.getElementById('modeStatus');
+  const btnReveal = document.getElementById('btnReveal');
 
   let items = [];
   let idx = 0;
   let autoplay = false;
   let timer = null;
+  let safePreview = true;
+  let presentationMode = 'carousel';
 
   let timeboxLeft = 0;
   let timeboxActive = false;
@@ -10149,6 +10700,28 @@ def x_dashboard():
   function setStatus(s, level){
     elStatus.textContent = s;
     elStatus.classList.toggle('warn', level === 'warn');
+  }
+
+  function applyPreviewState(){
+    const targets = [elText, elBars, elSummary].filter(Boolean);
+    targets.forEach(el => {
+      el.classList.toggle('blurred', safePreview);
+      el.classList.toggle('reveal', !safePreview);
+    });
+    if(elPreviewStatus){
+      elPreviewStatus.textContent = safePreview ? 'Safe preview enabled' : 'Preview revealed';
+    }
+    if(btnReveal){
+      btnReveal.textContent = safePreview ? 'Reveal preview' : 'Hide preview';
+    }
+  }
+
+  function setMode(mode){
+    presentationMode = mode;
+    if(elModeStatus){
+      elModeStatus.textContent = `Active mode: ${mode}`;
+    }
+    setStatus(`Presentation mode: ${mode}`);
   }
 
   function barLine(name, v){
@@ -10185,6 +10758,7 @@ def x_dashboard():
       elText.textContent = 'No items yet. Fetch → Label → Build.';
       elBars.innerHTML = '';
       elSummary.textContent = '';
+      applyPreviewState();
       return;
     }
     idx = ((idx % items.length)+items.length)%items.length;
@@ -10228,10 +10802,11 @@ def x_dashboard():
     const tags = (it.tags || l.tags || []).slice(0,10).map(x=>`#${x}`).join(' ');
     const summaryText = it.summary || l.summary || '';
     elSummary.textContent = (summaryText ? `Summary: ${summaryText}` : '') + (tags ? `  •  ${tags}` : '');
+    applyPreviewState();
   }
 
   async function jpost(url, body){
-    const r = await fetch(url, {method:'POST', headers: hdr, body: JSON.stringify(body||{})});
+    const r = await fetch(url, {method:'POST', headers: hdr, credentials:'same-origin', body: JSON.stringify(body||{})});
     const t = await r.text();
     let j = null;
     try{ j = JSON.parse(t); }catch(e){ j = {ok:false, error:t}; }
@@ -10353,6 +10928,20 @@ def x_dashboard():
   document.getElementById('btnPrev').onclick = ()=>{ stepPrev(); if(autoplay){ stopAutoplay(); } };
   document.getElementById('btnPlay').onclick = ()=>{ autoplay ? stopAutoplay() : startAutoplay(); };
 
+  if(btnReveal){
+    btnReveal.onclick = ()=>{
+      safePreview = !safePreview;
+      applyPreviewState();
+    };
+  }
+
+  const btnModeReel = document.getElementById('modeReel');
+  const btnModeMosaic = document.getElementById('modeMosaic');
+  const btnModeTimeline = document.getElementById('modeTimeline');
+  if(btnModeReel){ btnModeReel.onclick = ()=> setMode('reel'); }
+  if(btnModeMosaic){ btnModeMosaic.onclick = ()=> setMode('mosaic'); }
+  if(btnModeTimeline){ btnModeTimeline.onclick = ()=> setMode('timeline'); }
+
   document.getElementById('btnStart').onclick = ()=>{
     const mins = Math.max(1, Math.min(240, parseInt(document.getElementById('timeboxMin').value||'15',10)||15));
     timeboxLeft = mins * 60;
@@ -10370,35 +10959,23 @@ def x_dashboard():
     setStatus('Stopped.');
   };
 
-  document.getElementById('btnSave').onclick = async ()=>{
-    try{
-      const body = {
-        x_user_id: document.getElementById('xUser').value || '',
-        x_bearer: document.getElementById('xBearer').value || '',
-        openai_key: document.getElementById('oaiKey').value || '',
-        openai_model: document.getElementById('oaiModel').value || '',
-        weather_lat: document.getElementById('weatherLat').value || '',
-        weather_lon: document.getElementById('weatherLon').value || '',
-        weather_label: document.getElementById('weatherLabel').value || ''
-      };
-      setStatus('Saving…');
-      const j = await jpost('/x/api/settings', body);
-      if (j && Array.isArray(j.updated) && j.updated.length === 0) {
-        setStatus('Saved. (No changes detected — masked secrets were ignored)', 'warn');
-      } else {
-        setStatus('Saved. (Refresh page to see masked values updated)');
-      }
-    }catch(e){ setStatus('Save error: '+e.message, 'warn'); }
-  };
+  document.querySelectorAll('.copy-btn').forEach((btn)=>{
+    btn.addEventListener('click', ()=>{
+      const key = btn.getAttribute('data-copy');
+      const code = document.querySelector(`code[data-prompt="${key}"]`);
+      if(!code) return;
+      const text = code.textContent || '';
+      navigator.clipboard?.writeText(text).then(()=>{
+        btn.textContent = 'Copied';
+        setTimeout(()=>{ btn.textContent = 'Copy prompt'; }, 1200);
+      }).catch(()=>{
+        btn.textContent = 'Copy failed';
+        setTimeout(()=>{ btn.textContent = 'Copy prompt'; }, 1400);
+      });
+    });
+  });
 
-  document.getElementById('btnClearSecrets').onclick = async ()=>{
-    if(!confirm('Clear stored X bearer + OpenAI key for this account?')) return;
-    try{
-      setStatus('Clearing secrets…');
-      await jpost('/x/api/settings/clear', { keys: ['x_bearer', 'openai_key'] });
-      setStatus('Secrets cleared. Refresh to see blank fields.');
-    }catch(e){ setStatus('Clear error: '+e.message, 'warn'); }
-  };
+  applyPreviewState();
 })();
 </script>
 
@@ -10415,6 +10992,138 @@ def x_dashboard():
         weather_lat=weather_lat,
         weather_lon=weather_lon,
         weather_label=weather_label,
+        topbar_css=_TOPBAR_CSS,
+        topbar_html=build_topbar_html("x"),
+    )
+
+@app.route("/x/tromodel", methods=["GET"])
+def x_tromodel():
+    uid = _require_user_id_or_redirect()
+    if not isinstance(uid, int):
+        return uid
+    preferred_model = get_user_preferred_model(uid) or "openai"
+    oai_model = vault_get(uid, "openai_model", X2_DEFAULT_MODEL)
+    xai_model = os.getenv("XAI_MODEL", "") or vault_get(uid, "xai_model", "grok-2")
+    tpl = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="csrf-token" content="{{ csrf_token() }}"/>
+  <title>AX Scanner • Tri-Model Chat</title>
+  <style>
+    :root{
+      --bg0:#05070f; --bg1:#0b1020; --card:#0f1732; --muted:#97A3C7; --txt:#EAF0FF;
+      --a:#60A5FA; --b:#34D399; --c:#F472B6; --d:#FBBF24;
+      --br:20px;
+    }
+    *{box-sizing:border-box;}
+    body{
+      margin:0; color:var(--txt);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      background: radial-gradient(900px 600px at 10% 10%, rgba(96,165,250,.18), transparent 60%),
+                  radial-gradient(900px 600px at 90% 20%, rgba(244,114,182,.14), transparent 55%),
+                  linear-gradient(180deg, var(--bg0), var(--bg1));
+      min-height:100vh;
+    }
+    a{color:var(--a); text-decoration:none;}
+    .wrap{max-width:1200px; margin:0 auto; padding:22px;}
+    .topbar{
+      display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+      padding:14px 16px; border-radius: var(--br);
+      background: rgba(255,255,255,.04);
+      border:1px solid rgba(255,255,255,.08);
+    }
+    .grid{display:grid; gap:14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top:16px;}
+    .card{
+      background: rgba(255,255,255,.04);
+      border:1px solid rgba(255,255,255,.08);
+      border-radius: var(--br);
+      padding:14px;
+      min-height:280px;
+      display:flex; flex-direction:column; gap:12px;
+    }
+    .chip{padding:6px 10px; border-radius:999px; font-size:12px; border:1px solid rgba(255,255,255,.12); color:var(--muted);}
+    .row{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+    .panel-title{font-weight:700; letter-spacing:.4px;}
+    .msg{
+      padding:10px 12px; border-radius:14px; background: rgba(5,8,16,.65);
+      border:1px solid rgba(255,255,255,.10); color:var(--txt); font-size:13px;
+    }
+    .msg.ai{border-color: rgba(96,165,250,.35);}
+    .msg.grok{border-color: rgba(52,211,153,.35);}
+    .msg.llama{border-color: rgba(244,114,182,.35);}
+    .input{
+      width:100%; padding:10px 12px; border-radius:14px;
+      background: rgba(5,8,16,.55); border:1px solid rgba(255,255,255,.12); color:var(--txt);
+    }
+    .btn{
+      border:none; padding:10px 12px; border-radius:12px; cursor:pointer;
+      background: rgba(255,255,255,.08); color:var(--txt); font-weight:700;
+    }
+    .colorbar{height:10px; border-radius:999px; background: linear-gradient(90deg, var(--a), var(--b), var(--c), var(--d));}
+    .small{font-size:12px; color:var(--muted);}
+    {{ topbar_css|safe }}
+  </style>
+</head>
+<body>
+  {{ topbar_html|safe }}
+  <div class="wrap">
+    <div class="topbar">
+      <div>
+        <div class="panel-title">Tri-Model Chat Interface</div>
+        <div class="small">Color modality + pennylane entropic gains • preferred: <strong>{{ preferred_model }}</strong></div>
+      </div>
+      <div class="row">
+        <span class="chip">OpenAI: {{ oai_model }}</span>
+        <span class="chip">Grok: {{ xai_model }}</span>
+        <a href="/x" class="chip">Back to Dashboard</a>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="panel-title">OpenAI Node</div>
+        <div class="colorbar"></div>
+        <div class="msg ai">Color modality: adaptive gradient → low risk = cool, high risk = warm.</div>
+        <div class="msg ai">Entropic gain: +0.18 (pennylane lattice alignment).</div>
+        <div class="small">Use for structured summaries, JSON scoring, and carousel captions.</div>
+      </div>
+      <div class="card">
+        <div class="panel-title">Grok Node</div>
+        <div class="colorbar"></div>
+        <div class="msg grok">Color modality: saturated alert bands for urgency spikes.</div>
+        <div class="msg grok">Entropic gain: +0.12 (risk drift guard).</div>
+        <div class="small">Use for fast creative synthesis and rapid anomaly flags.</div>
+      </div>
+      <div class="card">
+        <div class="panel-title">Local Llama Node</div>
+        <div class="colorbar"></div>
+        <div class="msg llama">Color modality: muted palette with high contrast for night ops.</div>
+        <div class="msg llama">Entropic gain: +0.09 (local consensus stability).</div>
+        <div class="small">Use for offline resilience and deterministic tags.</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <div class="panel-title">Shared Prompt</div>
+      <div class="small">Route the same prompt through all three models and compare color + entropy deltas.</div>
+      <textarea class="input" rows="4" placeholder="Ask for colorized X post summaries, risk banding, and new post discovery..."></textarea>
+      <div class="row">
+        <button class="btn">Simulate exchange</button>
+        <span class="small">Hook this panel to real calls once models are wired.</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>"""
+    return render_template_string(
+        tpl,
+        preferred_model=(preferred_model or "openai").strip().lower(),
+        oai_model=oai_model or X2_DEFAULT_MODEL,
+        xai_model=xai_model or "grok-2",
+        topbar_css=_TOPBAR_CSS,
+        topbar_html=build_topbar_html("chatbot"),
     )
 
 @app.route("/x/settings", methods=["GET"])
@@ -10422,8 +11131,18 @@ def x_settings():
     uid = _require_user_id_or_redirect()
     if not isinstance(uid, int):
         return uid
-    xai_key = vault_get(uid, "xai_api_key", "")
-    xai_model = vault_get(uid, "xai_model", "grok-2")
+    x_user = vault_get(uid, "x_user_id", "")
+    x_bearer = vault_get(uid, "x_bearer", "")
+    oai_model = vault_get(uid, "openai_model", X2_DEFAULT_MODEL)
+    oai_key = vault_get(uid, "openai_key", "")
+    weather_lat = vault_get(uid, "x_weather_lat", "")
+    weather_lon = vault_get(uid, "x_weather_lon", "")
+    weather_label = vault_get(uid, "x_weather_label", "")
+    preferred_model = get_user_preferred_model(uid) or "openai"
+    xai_key_env = os.getenv("XAI_API_KEY", "")
+    xai_model_env = os.getenv("XAI_MODEL", "")
+    xai_key = xai_key_env or vault_get(uid, "xai_api_key", "")
+    xai_model = xai_model_env or vault_get(uid, "xai_model", "grok-2")
     xai_prompt = vault_get(uid, "xai_system_prompt", "")
     tpl = """<!doctype html>
 <html lang="en">
@@ -10498,20 +11217,70 @@ def x_settings():
       background: rgba(255,255,255,.04);
       color:var(--muted); font-size:12px;
     }
+    {{ topbar_css|safe }}
   </style>
 </head>
 <body>
+  {{ topbar_html|safe }}
   <div class="wrap">
-    <div class="card">
-      <h3>XAI Settings</h3>
+    <div class="card" style="margin-bottom:16px;">
+      <h3>X Feed + OpenAI Settings</h3>
       <div class="body">
         <div class="row" style="margin-bottom:12px;">
           <a href="/x" class="chip">← Back to AX Dashboard</a>
+          <a href="/x/tromodel" class="chip">Tri-Model Chat</a>
           <a href="/logout" class="chip">Logout</a>
         </div>
         <div class="field">
+          <label>X user id (username or numeric)</label>
+          <input id="xUser" placeholder="X user id" value="{{ x_user }}"/>
+        </div>
+        <div class="field">
+          <label>X bearer token</label>
+          <input id="xBearer" placeholder="X bearer token" value="{{ x_bearer_mask }}"/>
+        </div>
+        <div class="field">
+          <label>OpenAI API key</label>
+          <input id="oaiKey" placeholder="OpenAI API key" value="{{ oai_key_mask }}"/>
+        </div>
+        <div class="field">
+          <label>OpenAI model</label>
+          <input id="oaiModel" placeholder="Model (e.g. gpt-4.1-mini)" value="{{ oai_model }}"/>
+        </div>
+        <div class="field">
+          <label>Preferred model type</label>
+          <select id="preferredModel">
+            <option value="openai" {% if preferred_model == 'openai' %}selected{% endif %}>OpenAI</option>
+            <option value="grok" {% if preferred_model == 'grok' %}selected{% endif %}>Grok</option>
+            <option value="llama_local" {% if preferred_model == 'llama_local' %}selected{% endif %}>Local Llama</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Weather Scanner (lat/lon stored per user)</label>
+          <input id="weatherLat" placeholder="Latitude" value="{{ weather_lat }}"/>
+          <input id="weatherLon" placeholder="Longitude" value="{{ weather_lon }}"/>
+          <input id="weatherLabel" placeholder="Location label (optional)" value="{{ weather_label }}"/>
+          <div class="small">Add coordinates to fuse live weather into the carousel.</div>
+        </div>
+        <div class="row">
+          <button class="btn primary" id="btnSaveX">Save settings</button>
+          <button class="btn danger" id="btnClearX">Clear secrets</button>
+        </div>
+        <div class="status" id="statusX">Ready.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>XAI Settings</h3>
+      <div class="body">
+        <div class="field">
           <label>XAI API Key</label>
-          <input id="xaiKey" placeholder="XAI API key" value="{{ xai_key_mask }}"/>
+          <input id="xaiKey" placeholder="XAI API key"
+                 value="{{ xai_key_mask }}"
+                 {% if xai_env_locked %}disabled{% endif %}/>
+          {% if xai_env_locked %}
+          <div class="small">XAI API key is managed by the <span class="kbd">XAI_API_KEY</span> environment variable.</div>
+          {% endif %}
         </div>
         <div class="field">
           <label>XAI Model</label>
@@ -10535,9 +11304,11 @@ def x_settings():
   const csrf = document.querySelector('meta[name=\"csrf-token\"]').getAttribute('content');
   const hdr = {'Content-Type':'application/json', 'X-CSRFToken': csrf};
   const status = document.getElementById('status');
+  const statusX = document.getElementById('statusX');
+  const xaiEnvLocked = {{ "true" if xai_env_locked else "false" }};
 
   async function jpost(url, body){
-    const r = await fetch(url, {method:'POST', headers: hdr, body: JSON.stringify(body||{})});
+    const r = await fetch(url, {method:'POST', headers: hdr, credentials:'same-origin', body: JSON.stringify(body||{})});
     const t = await r.text();
     let j = null;
     try{ j = JSON.parse(t); }catch(e){ j = {ok:false, error:t}; }
@@ -10547,11 +11318,37 @@ def x_settings():
     return j;
   }
 
+  document.getElementById('btnSaveX').onclick = async ()=>{
+    try{
+      statusX.textContent = 'Saving...';
+      await jpost('/x/api/settings', {
+        x_user_id: document.getElementById('xUser').value || '',
+        x_bearer: document.getElementById('xBearer').value || '',
+        openai_key: document.getElementById('oaiKey').value || '',
+        openai_model: document.getElementById('oaiModel').value || '',
+        weather_lat: document.getElementById('weatherLat').value || '',
+        weather_lon: document.getElementById('weatherLon').value || '',
+        weather_label: document.getElementById('weatherLabel').value || '',
+        preferred_model: document.getElementById('preferredModel').value || 'openai'
+      });
+      statusX.textContent = 'Saved. Refresh to see masked keys.';
+    }catch(e){ statusX.textContent = 'Save error: ' + e.message; }
+  };
+
+  document.getElementById('btnClearX').onclick = async ()=>{
+    if(!confirm('Clear stored X bearer + OpenAI key for this account?')) return;
+    try{
+      statusX.textContent = 'Clearing...';
+      await jpost('/x/api/settings/clear', { keys: ['x_bearer', 'openai_key'] });
+      statusX.textContent = 'Secrets cleared. Refresh to see blank.';
+    }catch(e){ statusX.textContent = 'Clear error: ' + e.message; }
+  };
+
   document.getElementById('btnSaveXai').onclick = async ()=>{
     try{
       status.textContent = 'Saving...';
       await jpost('/x/api/xai_settings', {
-        xai_api_key: document.getElementById('xaiKey').value || '',
+        xai_api_key: xaiEnvLocked ? '' : (document.getElementById('xaiKey').value || ''),
         xai_model: document.getElementById('xaiModel').value || '',
         xai_system_prompt: document.getElementById('xaiPrompt').value || ''
       });
@@ -10573,9 +11370,20 @@ def x_settings():
 </html>"""
     return render_template_string(
         tpl,
+        x_user=x_user,
+        x_bearer_mask=_mask_secret(x_bearer),
+        oai_model=oai_model or X2_DEFAULT_MODEL,
+        oai_key_mask=_mask_secret(oai_key),
+        weather_lat=weather_lat,
+        weather_lon=weather_lon,
+        weather_label=weather_label,
+        preferred_model=(preferred_model or "openai").strip().lower(),
         xai_key_mask=_mask_secret(xai_key),
         xai_model=xai_model or "grok-2",
         xai_prompt=xai_prompt or "",
+        xai_env_locked=bool(xai_key_env),
+        topbar_css=_TOPBAR_CSS,
+        topbar_html=build_topbar_html("settings"),
     )
 
 @app.route("/x/api/settings", methods=["POST"])
@@ -10603,6 +11411,7 @@ def x_api_settings():
     weather_lat = clean_text(str(data.get("weather_lat") or ""), 32)
     weather_lon = clean_text(str(data.get("weather_lon") or ""), 32)
     weather_label = clean_text(str(data.get("weather_label") or ""), 120)
+    preferred_model = clean_text(str(data.get("preferred_model") or ""), 32).lower()
 
     # Model allowlist-ish: keep it simple and safe (no spaces, no control chars)
     if oai_model and not re.fullmatch(r"[A-Za-z0-9._:\-]{1,80}", oai_model):
@@ -10631,6 +11440,12 @@ def x_api_settings():
     if oai_model:
         vault_set(uid, "openai_model", oai_model)
         wrote.append("openai_model")
+
+    if preferred_model:
+        if preferred_model not in ("openai", "grok", "llama_local"):
+            return jsonify({"ok": False, "error": "Invalid preferred_model"}), 400
+        set_user_preferred_model(uid, preferred_model)
+        wrote.append("preferred_model")
 
     if weather_lat and weather_lon:
         try:
@@ -10679,6 +11494,7 @@ def x_api_xai_settings():
     if not isinstance(data, dict):
         return jsonify({"ok": False, "error": "Invalid JSON"}), 400
 
+    xai_key_env = os.getenv("XAI_API_KEY", "")
     xai_key = str(data.get("xai_api_key") or "")
     xai_model = clean_text(str(data.get("xai_model") or ""), 80) or "grok-2"
     xai_prompt = str(data.get("xai_system_prompt") or "")
@@ -10690,6 +11506,8 @@ def x_api_xai_settings():
         return jsonify({"ok": False, "error": "Invalid xai_model"}), 400
 
     wrote = []
+    if xai_key_env:
+        xai_key = ""
     if xai_key and not _is_masked_secret(xai_key):
         if len(xai_key) > 6000:
             return jsonify({"ok": False, "error": "xai_api_key too long"}), 400
@@ -10712,6 +11530,8 @@ def x_api_xai_settings_clear():
     if csrf_fail:
         return csrf_fail
     uid = _require_user_id_or_abort()
+    if os.getenv("XAI_API_KEY"):
+        return jsonify({"ok": False, "error": "XAI_API_KEY managed by environment"}), 400
     vault_set(uid, "xai_api_key", "")
     return jsonify({"ok": True, "cleared": ["xai_api_key"]})
     
@@ -10769,6 +11589,7 @@ def x_api_fetch():
             except Exception:
                 continue
 
+        jailbreak_meta = _x2_scan_and_blacklist(uid, safe_rows)
         n = _x2_db_upsert_tweets(uid, safe_rows)
 
         # Only return small, non-sensitive meta (avoid echoing payload/text)
@@ -10782,7 +11603,7 @@ def x_api_fetch():
         except Exception:
             safe_meta = {}
 
-        return jsonify({"ok": True, "count": int(n), "meta": safe_meta})
+        return jsonify({"ok": True, "count": int(n), "meta": safe_meta, "jailbreaks": jailbreak_meta})
     except Exception:
         try:
             logger.exception("x_api_fetch failed")  # type: ignore[name-defined]
@@ -10823,6 +11644,167 @@ def x_api_weather_item():
         return jsonify({"ok": False, "error": "Missing weather settings"}), 400
     return jsonify({"ok": True, "item": item})
         
+def _x_media_chunk_size() -> int:
+    try:
+        kb = int(os.getenv("X_MEDIA_CHUNK_KB", "256"))
+    except Exception:
+        kb = 256
+    return max(64, min(1024, kb)) * 1024
+
+def _x_media_ttl_s() -> int:
+    try:
+        ttl = int(os.getenv("X_MEDIA_TTL_S", "7200"))
+    except Exception:
+        ttl = 7200
+    return max(300, min(7 * 24 * 3600, ttl))
+
+def _x_cache_ttl_s() -> int:
+    try:
+        ttl = int(os.getenv("X_CACHE_TTL_S", "1800"))
+    except Exception:
+        ttl = 1800
+    return max(120, min(24 * 3600, ttl))
+
+@app.route("/x/api/media/upload", methods=["POST"])
+def x_api_media_upload():
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+    uid = _require_user_id_or_abort()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "Invalid JSON"}), 400
+
+    filename = clean_text(str(data.get("filename") or ""), 180)
+    mime = clean_text(str(data.get("mime") or ""), 120)
+    kind = clean_text(str(data.get("kind") or ""), 20).lower()
+    raw_b64 = str(data.get("data_b64") or "")
+    if kind not in ("image", "video"):
+        return jsonify({"ok": False, "error": "Invalid kind"}), 400
+    if not raw_b64:
+        return jsonify({"ok": False, "error": "Missing data_b64"}), 400
+
+    try:
+        payload = base64.b64decode(raw_b64.encode("utf-8"), validate=True)
+    except Exception:
+        return jsonify({"ok": False, "error": "Invalid base64 payload"}), 400
+
+    max_mb = int(os.getenv("X_MEDIA_MAX_MB", "12"))
+    if len(payload) > max_mb * 1024 * 1024:
+        return jsonify({"ok": False, "error": "Media payload too large"}), 400
+
+    media_id = uuid.uuid4().hex
+    created_at = now_ts()
+    expires_at = created_at + _x_media_ttl_s()
+    meta = {
+        "filename": filename,
+        "mime": mime,
+        "size_bytes": len(payload),
+        "kind": kind,
+    }
+    meta_enc = encrypt_data(json.dumps(meta, separators=(",", ":")))
+    filename_enc = encrypt_data(filename)
+    mime_enc = encrypt_data(mime)
+    if not meta_enc:
+        return jsonify({"ok": False, "error": "Encrypt failed"}), 500
+
+    chunk_size = _x_media_chunk_size()
+    chunks = [payload[i:i + chunk_size] for i in range(0, len(payload), chunk_size)]
+
+    try:
+        with sqlite3.connect(DB_FILE) as db:
+            cur = db.cursor()
+            cur.execute("BEGIN")
+            cur.execute(
+                """INSERT INTO x_media_objects
+                   (media_id, user_id, kind, filename_enc, mime_enc, size_bytes, meta_enc, created_at, expires_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (
+                    media_id,
+                    uid,
+                    kind,
+                    filename_enc,
+                    mime_enc,
+                    int(len(payload)),
+                    meta_enc,
+                    int(created_at),
+                    int(expires_at),
+                ),
+            )
+            for idx, chunk in enumerate(chunks):
+                chunk_enc = encrypt_data(base64.b64encode(chunk))
+                if not chunk_enc:
+                    raise RuntimeError("chunk encrypt failed")
+                cur.execute(
+                    """INSERT INTO x_media_chunks
+                       (user_id, media_id, chunk_index, data_enc, pass_num, created_at, expires_at)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (uid, media_id, idx, chunk_enc, 0, int(created_at), int(expires_at)),
+                )
+            db.commit()
+    except Exception:
+        return jsonify({"ok": False, "error": "Upload failed"}), 500
+
+    return jsonify({"ok": True, "media_id": media_id, "chunks": len(chunks), "size_bytes": len(payload)})
+
+@app.route("/x/api/cache/put", methods=["POST"])
+def x_api_cache_put():
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+    uid = _require_user_id_or_abort()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "Invalid JSON"}), 400
+    cache_key = clean_text(str(data.get("cache_key") or ""), 160)
+    value = data.get("value")
+    if not cache_key or value is None:
+        return jsonify({"ok": False, "error": "Missing cache_key/value"}), 400
+    value_str = clean_text(str(value), 16000)
+    enc = encrypt_data(value_str)
+    if not enc:
+        return jsonify({"ok": False, "error": "Encrypt failed"}), 500
+    created_at = now_ts()
+    expires_at = created_at + _x_cache_ttl_s()
+    with sqlite3.connect(DB_FILE) as db:
+        db.execute(
+            """INSERT INTO x_cache_bucket(user_id, cache_key, data_enc, pass_num, created_at, expires_at)
+               VALUES(?,?,?,?,?,?)
+               ON CONFLICT(user_id, cache_key) DO UPDATE SET
+                 data_enc=excluded.data_enc,
+                 pass_num=0,
+                 created_at=excluded.created_at,
+                 expires_at=excluded.expires_at""",
+            (uid, cache_key, enc, 0, int(created_at), int(expires_at)),
+        )
+        db.commit()
+    return jsonify({"ok": True, "cache_key": cache_key})
+
+@app.route("/x/api/cache/get", methods=["POST"])
+def x_api_cache_get():
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+    uid = _require_user_id_or_abort()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "Invalid JSON"}), 400
+    cache_key = clean_text(str(data.get("cache_key") or ""), 160)
+    if not cache_key:
+        return jsonify({"ok": False, "error": "Missing cache_key"}), 400
+    with sqlite3.connect(DB_FILE) as db:
+        row = db.execute(
+            "SELECT data_enc, expires_at FROM x_cache_bucket WHERE user_id=? AND cache_key=?",
+            (uid, cache_key),
+        ).fetchone()
+    if not row:
+        return jsonify({"ok": False, "error": "Cache miss"}), 404
+    enc, expires_at = row[0], int(row[1] or 0)
+    if expires_at and expires_at <= now_ts():
+        return jsonify({"ok": False, "error": "Cache expired"}), 410
+    value = decrypt_data(enc) if enc else None
+    return jsonify({"ok": True, "cache_key": cache_key, "value": value or ""})
+
 @app.route("/x/api/label", methods=["POST"])
 def x_api_label():
     # Require logged-in user + CSRF for this state-changing route
@@ -10867,6 +11849,18 @@ def x_api_label():
     labeled = 0
     errors = 0
     try:
+        scan_batch = []
+        for tid in ids:
+            t = tweets_by_id.get(str(tid))
+            if t:
+                scan_batch.append(t)
+        jailbreak_meta = _x2_scan_and_blacklist(uid, scan_batch)
+        if jailbreak_meta.get("count", 0) > 0:
+            return jsonify({
+                "ok": False,
+                "error": "Jailbreak patterns detected. Review halted.",
+                "jailbreaks": jailbreak_meta,
+            }), 400
         for tid in ids:
             tid = clean_text(str(tid or ""), 64)
             if not tid:
@@ -10964,6 +11958,7 @@ def x_admin():
     .btn{margin-top:12px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.08);color:#eaf0ff;cursor:pointer;font-weight:700;}
     a{color:#60a5fa;text-decoration:none;}
     .small{color:rgba(255,255,255,.70);font-size:13px;line-height:1.4;}
+    {{ topbar_css|safe }}
   </style>
   <script>
     (function(){
@@ -10978,6 +11973,7 @@ def x_admin():
   </script>
 </head>
 <body>
+  {{ topbar_html|safe }}
   <div class="wrap">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
       <h2 style="margin:0;">X Admin Settings</h2>
@@ -11008,7 +12004,12 @@ def x_admin():
   </div>
 </body>
 </html>"""
-    return render_template_string(tpl, default_model=default_model)
+    return render_template_string(
+        tpl,
+        default_model=default_model,
+        topbar_css=_TOPBAR_CSS,
+        topbar_html=build_topbar_html("settings"),
+    )
 
 
 
