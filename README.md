@@ -1,6 +1,7 @@
 # XScanner
 
 AX Scanner (X dashboard) is a Flask app that combines X feed scanning, risk scoring, and quantum/LLM tooling. This README lists the deployment environment variables and common runtime notes.
+![Uploading copyImage.png…]()
 
 ## Required environment variables
 
