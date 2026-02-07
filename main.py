@@ -10386,24 +10386,135 @@ def x_dashboard():
       </div>
 
       <div class="card">
-        <h3>X Feed Next Ideas</h3>
+        <h3>Weaviate Embed Lab</h3>
         <div class="body">
-          <div class="small">
-            <ol style="padding-left:18px; margin:0;">
-              <li><strong>Route pulse matching:</strong> boost tweets that mention the active route corridor or waypoints.</li>
-              <li><strong>Hazard authority weighting:</strong> score posts higher when they cite DOT, weather, or responder sources.</li>
-              <li><strong>Signal decay lanes:</strong> auto-archive items as they age, with a recency shelf for live alerts.</li>
-              <li><strong>Driver calm mode:</strong> soften language + color for high stress windows to reduce panic.</li>
-              <li><strong>Weaviate weave:</strong> embed every post + risk snapshot into a vector lattice for clustering.</li>
-              <li><strong>Post grabber phases:</strong> stagger searches by corridor to reduce API burst pressure.</li>
-              <li><strong>Pennylane signal drift:</strong> use quantum entropy to detect low-confidence bursts.</li>
-              <li><strong>Color trust bands:</strong> apply risk-aware palettes to minimize alert fatigue.</li>
-            </ol>
+          <div class="stack">
+            <div class="small">Embed X posts into Weaviate-style vectors for clustering, recency search, and risk triangulation.</div>
+            <div class="row">
+              <span class="pill">Index: <span class="kbd">x_posts_v2</span></span>
+              <span class="pill">Distance: <span class="kbd">cosine</span></span>
+              <span class="pill">TopK: <span class="kbd">48</span></span>
+            </div>
+            <div class="hr"></div>
+            <div class="chipset">
+              <div class="chip">Auto-embed on ingest</div>
+              <div class="chip">Route anchor vectors</div>
+              <div class="chip">Recall high-signal clusters</div>
+              <div class="chip">Rerank with safety tags</div>
+            </div>
+            <div class="small">Use embeddings to drive risk scanner hints + carousel ordering.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Color Mixer</h3>
+        <div class="body">
+          <div class="small">Colorize posts based on sentiment, urgency, and novelty. Blend palettes for the X AI dashboard.</div>
+          <div class="hr"></div>
+          <div class="swatches">
+            <div class="swatch" style="background:#60A5FA;"></div>
+            <div class="swatch" style="background:#34D399;"></div>
+            <div class="swatch" style="background:#F472B6;"></div>
+            <div class="swatch" style="background:#FBBF24;"></div>
+            <div class="swatch" style="background:#22D3EE;"></div>
+            <div class="swatch" style="background:#A78BFA;"></div>
           </div>
           <div class="hr"></div>
-          <div class="small">
-            Set <span class="kbd">RGN_X_TEST_API=synthetic</span> or a test URL to inject synthetic feed data for validation.
+          <div class="chipset">
+            <div class="chip">Risk → Warmth shift</div>
+            <div class="chip">Novelty → Glow boost</div>
+            <div class="chip">Negativity → Saturation clamp</div>
           </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Discovery Radar</h3>
+        <div class="body">
+          <div class="small">Continuous scouting for new posts, reply spikes, and emergent topics.</div>
+          <div class="hr"></div>
+          <div class="pipeline">
+            <div class="stage">
+              <div><b>New posts sweep</b><div class="mini">minute-level scanning for corridor mentions</div></div>
+              <span class="tag live">armed</span>
+            </div>
+            <div class="stage">
+              <div><b>Reply storm watch</b><div class="mini">detect fast-moving conversational spikes</div></div>
+              <span class="tag wait">warming</span>
+            </div>
+            <div class="stage">
+              <div><b>Topic drift</b><div class="mini">monitor sentiment + risk delta per hour</div></div>
+              <span class="tag off">idle</span>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="small">Insights flow into the carousel tags and risk lane weighting.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Pennylane Quantum Studio</h3>
+        <div class="body">
+          <div class="small">Entropic gain tracking for quantum risk lifts. Ideal for multi-model consensus monitoring.</div>
+          <div class="hr"></div>
+          <div class="pipeline">
+            <div class="stage">
+              <div><b>Qubit lattice</b><div class="mini">5-wire pennylane circuit seeded by signal entropy</div></div>
+              <span class="tag live">pennylane</span>
+            </div>
+            <div class="stage">
+              <div><b>Entropic gain</b><div class="mini">ΔH over last 12 scans to calibrate risk volatility</div></div>
+              <span class="tag wait">queue</span>
+            </div>
+            <div class="stage">
+              <div><b>Quantum vote</b><div class="mini">weight tri-LLM decisions with entropy multiplier</div></div>
+              <span class="tag live">armed</span>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="chipset">
+            <div class="chip">qml probs</div>
+            <div class="chip">entropy score</div>
+            <div class="chip">risk drift</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Post Grabber</h3>
+        <div class="body">
+          <div class="small">Road-aware X post capture with burst control and corridor filtering.</div>
+          <div class="hr"></div>
+          <div class="pipeline">
+            <div class="stage">
+              <div><b>Topic sweeps</b><div class="mini">rotate queries by region + timebox</div></div>
+              <span class="tag live">live</span>
+            </div>
+            <div class="stage">
+              <div><b>Risk gate</b><div class="mini">filter noise before labeling to reduce 401 bursts</div></div>
+              <span class="tag wait">queued</span>
+            </div>
+            <div class="stage">
+              <div><b>Fetch throttle</b><div class="mini">stagger requests across user &amp; topic lanes</div></div>
+              <span class="tag live">steady</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Media Vault (Encrypted)</h3>
+        <div class="body">
+          <div class="small">Securely cache images/videos without Pillow. Chunks are PQ-sealed and stored per user.</div>
+          <div class="hr"></div>
+          <div class="chipset">
+            <div class="chip">chunked upload</div>
+            <div class="chip">AES-GCM + PQ wrap</div>
+            <div class="chip">7-pass delete</div>
+            <div class="chip">bucket cache</div>
+          </div>
+          <div class="small" style="margin-top:10px;">Use the media endpoints to store assets for carousel cards and tri-model chat avatars.</div>
         </div>
       </div>
 
