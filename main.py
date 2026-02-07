@@ -2233,6 +2233,31 @@ def create_tables():
         )""")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_x2_labels_time ON x2_labels(user_id, created_at)")
 
+        cursor.execute("""CREATE TABLE IF NOT EXISTS x2_blacklist (
+            user_id INTEGER NOT NULL,
+            tid TEXT NOT NULL,
+            reason TEXT,
+            pattern TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(user_id, tid),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_x2_blacklist_time ON x2_blacklist(user_id, created_at)")
+
+        cursor.execute("""CREATE TABLE IF NOT EXISTS x2_jailbreak_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            tid TEXT,
+            src TEXT,
+            reason TEXT,
+            pattern TEXT,
+            text_excerpt TEXT,
+            weaviate_payload TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_x2_jailbreak_time ON x2_jailbreak_log(user_id, created_at)")
+
         cursor.execute("""CREATE TABLE IF NOT EXISTS x2_posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -2792,13 +2817,112 @@ def x2_unlabeled_ids(owner_user_id: int, limit: int = 24) -> List[str]:
     uid = int(owner_user_id)
     with _x2_db() as conn:
         rows = conn.execute(
-            "SELECT t.tid FROM x2_tweets t LEFT JOIN x2_labels l "
-            "ON t.user_id=l.user_id AND t.tid=l.tid "
-            "WHERE t.user_id=? AND l.tid IS NULL "
+            "SELECT t.tid FROM x2_tweets t "
+            "LEFT JOIN x2_labels l ON t.user_id=l.user_id AND t.tid=l.tid "
+            "LEFT JOIN x2_blacklist b ON t.user_id=b.user_id AND t.tid=b.tid "
+            "WHERE t.user_id=? AND l.tid IS NULL AND b.tid IS NULL "
             "ORDER BY t.inserted_at DESC LIMIT ?",
             (uid, int(limit)),
         ).fetchall()
     return [str(r[0]) for r in rows or []]
+
+
+_PHF_JAILBREAK_PHRASES = [
+    "ignore previous instructions",
+    "system prompt",
+    "developer message",
+    "jailbreak",
+    "do not follow",
+    "you are not bound",
+    "bypass",
+    "disable safety",
+    "reveal hidden",
+    "prompt injection",
+    "policy override",
+    "act as",
+    "DAN",
+    "roleplay as",
+    "unfiltered",
+    "no restrictions",
+    "chain of thought",
+    "exfiltrate",
+    "leak",
+]
+_PHF_JAILBREAK_HASHES = {hashlib.sha256(p.lower().encode("utf-8")).hexdigest(): p for p in _PHF_JAILBREAK_PHRASES}
+
+def _phf_scan_jailbreak(text: str) -> list[dict]:
+    """PHF-style scan: hashed phrase lookup + simple heuristics."""
+    if not text:
+        return []
+    lowered = text.lower()
+    hits: list[dict] = []
+    for phrase in _PHF_JAILBREAK_PHRASES:
+        if phrase.lower() in lowered:
+            h = hashlib.sha256(phrase.lower().encode("utf-8")).hexdigest()
+            hits.append({"pattern": phrase, "hash": h, "reason": "phrase_match"})
+    # simple heuristic for prompt injection markers
+    if re.search(r"\b(ignore|bypass|override)\b.*\b(instructions|policy|safety)\b", lowered):
+        hits.append({"pattern": "heuristic_override", "hash": "heuristic", "reason": "heuristic"})
+    return hits
+
+def _x2_blacklist_tweet(uid: int, tid: str, src: str, text: str, hit: dict) -> None:
+    tid = clean_text(tid, 64)
+    if not tid:
+        return
+    reason = clean_text(hit.get("reason", "jailbreak") or "jailbreak", 120)
+    pattern = clean_text(hit.get("pattern", "") or "", 120)
+    created_at = now_iso()
+    excerpt = clean_text(text or "", 500)
+    weaviate_payload = {
+        "tid": tid,
+        "pattern": pattern,
+        "reason": reason,
+        "excerpt": excerpt,
+        "src": clean_text(src or "", 24),
+        "created_at": created_at,
+    }
+    with _x2_db() as conn:
+        conn.execute(
+            """INSERT INTO x2_blacklist(user_id, tid, reason, pattern, created_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(user_id, tid) DO UPDATE SET
+                 reason=excluded.reason,
+                 pattern=excluded.pattern,
+                 created_at=excluded.created_at""",
+            (uid, tid, reason, pattern, created_at),
+        )
+        conn.execute(
+            """INSERT INTO x2_jailbreak_log
+               (user_id, tid, src, reason, pattern, text_excerpt, weaviate_payload, created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                uid,
+                tid,
+                clean_text(src or "", 24),
+                reason,
+                pattern,
+                excerpt,
+                json.dumps(weaviate_payload, ensure_ascii=False),
+                created_at,
+            ),
+        )
+        conn.commit()
+
+def _x2_scan_and_blacklist(uid: int, tweets: list[dict]) -> dict:
+    flagged = []
+    for t in tweets or []:
+        tid = clean_text(str(t.get("tid", "") or ""), 64)
+        text = clean_text(str(t.get("text", "") or ""), 8000)
+        if not tid or not text:
+            continue
+        hits = _phf_scan_jailbreak(text)
+        if not hits:
+            continue
+        src = clean_text(str(t.get("src", "") or ""), 24)
+        for hit in hits[:3]:
+            _x2_blacklist_tweet(uid, tid, src, text, hit)
+        flagged.append({"tid": tid, "hits": hits})
+    return {"count": len(flagged), "flagged": flagged}
 
 
 def x2_upsert_label(owner_user_id: int, tid: str, obj: Dict[str, Any], model: str = "") -> None:
@@ -3152,9 +3276,10 @@ def _x2_build_carousel(owner_user_id: int, timebox_s: float = 0.0, limit: int = 
         rows = conn.execute(
             "SELECT t.tid,t.author,t.created_at,t.text,t.src,t.inserted_at,"
             "l.neg,l.sar,l.tone,l.edu,l.truth,l.cool,l.click,l.incl,l.ext,l.summary,l.tags_json,l.title "
-            "FROM x2_tweets t JOIN x2_labels l "
-            "ON t.user_id=l.user_id AND t.tid=l.tid "
-            "WHERE t.user_id=? "
+            "FROM x2_tweets t "
+            "JOIN x2_labels l ON t.user_id=l.user_id AND t.tid=l.tid "
+            "LEFT JOIN x2_blacklist b ON t.user_id=b.user_id AND t.tid=b.tid "
+            "WHERE t.user_id=? AND b.tid IS NULL "
             "ORDER BY t.inserted_at DESC LIMIT 900",
             (uid,),
         ).fetchall()
@@ -10230,6 +10355,13 @@ def x_dashboard():
     .mini{
       font-size:11px; color:var(--muted);
     }
+    .blurred{
+      filter: blur(6px);
+      transition: filter .2s ease;
+    }
+    .reveal{
+      filter: blur(0);
+    }
     {{ topbar_css|safe }}
   </style>
 </head>
@@ -10341,10 +10473,15 @@ def x_dashboard():
         <h3>Carousel</h3>
         <div class="tweet">
           <div class="meta" id="meta">—</div>
-          <div class="text" id="text">No items yet. Fetch → Label → Build.</div>
-          <div class="bars" id="bars"></div>
+          <div class="text blurred" id="text">No items yet. Fetch → Label → Build.</div>
+          <div class="bars blurred" id="bars"></div>
           <div class="hr"></div>
-          <div class="small" id="summary"></div>
+          <div class="small blurred" id="summary"></div>
+          <div class="hr"></div>
+          <div class="row">
+            <button class="btn" id="btnReveal">Reveal preview</button>
+            <span class="small" id="previewStatus">Safe preview enabled</span>
+          </div>
         </div>
       </div>
       <div class="card">
@@ -10355,6 +10492,20 @@ def x_dashboard():
           <div class="chipset" id="weatherChips">
             <div class="chip">Awaiting location + pulse.</div>
           </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Presentation Modes</h3>
+        <div class="body">
+          <div class="small">Switch how posts are displayed: reels, mosaics, or timelines. Each mode tunes dwell + layout.</div>
+          <div class="hr"></div>
+          <div class="row">
+            <button class="btn" id="modeReel">Reel mode</button>
+            <button class="btn" id="modeMosaic">Mosaic mode</button>
+            <button class="btn" id="modeTimeline">Timeline mode</button>
+          </div>
+          <div class="small" id="modeStatus" style="margin-top:10px;">Active mode: carousel</div>
         </div>
       </div>
 
@@ -10426,6 +10577,95 @@ def x_dashboard():
             <div class="chip">Novelty → Glow boost</div>
             <div class="chip">Negativity → Saturation clamp</div>
           </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Discovery Radar</h3>
+        <div class="body">
+          <div class="small">Continuous scouting for new posts, reply spikes, and emergent topics.</div>
+          <div class="hr"></div>
+          <div class="pipeline">
+            <div class="stage">
+              <div><b>New posts sweep</b><div class="mini">minute-level scanning for corridor mentions</div></div>
+              <span class="tag live">armed</span>
+            </div>
+            <div class="stage">
+              <div><b>Reply storm watch</b><div class="mini">detect fast-moving conversational spikes</div></div>
+              <span class="tag wait">warming</span>
+            </div>
+            <div class="stage">
+              <div><b>Topic drift</b><div class="mini">monitor sentiment + risk delta per hour</div></div>
+              <span class="tag off">idle</span>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="small">Insights flow into the carousel tags and risk lane weighting.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Pennylane Quantum Studio</h3>
+        <div class="body">
+          <div class="small">Entropic gain tracking for quantum risk lifts. Ideal for multi-model consensus monitoring.</div>
+          <div class="hr"></div>
+          <div class="pipeline">
+            <div class="stage">
+              <div><b>Qubit lattice</b><div class="mini">5-wire pennylane circuit seeded by signal entropy</div></div>
+              <span class="tag live">pennylane</span>
+            </div>
+            <div class="stage">
+              <div><b>Entropic gain</b><div class="mini">ΔH over last 12 scans to calibrate risk volatility</div></div>
+              <span class="tag wait">queue</span>
+            </div>
+            <div class="stage">
+              <div><b>Quantum vote</b><div class="mini">weight tri-LLM decisions with entropy multiplier</div></div>
+              <span class="tag live">armed</span>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="chipset">
+            <div class="chip">qml probs</div>
+            <div class="chip">entropy score</div>
+            <div class="chip">risk drift</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Post Grabber</h3>
+        <div class="body">
+          <div class="small">Road-aware X post capture with burst control and corridor filtering.</div>
+          <div class="hr"></div>
+          <div class="pipeline">
+            <div class="stage">
+              <div><b>Topic sweeps</b><div class="mini">rotate queries by region + timebox</div></div>
+              <span class="tag live">live</span>
+            </div>
+            <div class="stage">
+              <div><b>Risk gate</b><div class="mini">filter noise before labeling to reduce 401 bursts</div></div>
+              <span class="tag wait">queued</span>
+            </div>
+            <div class="stage">
+              <div><b>Fetch throttle</b><div class="mini">stagger requests across user &amp; topic lanes</div></div>
+              <span class="tag live">steady</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Media Vault (Encrypted)</h3>
+        <div class="body">
+          <div class="small">Securely cache images/videos without Pillow. Chunks are PQ-sealed and stored per user.</div>
+          <div class="hr"></div>
+          <div class="chipset">
+            <div class="chip">chunked upload</div>
+            <div class="chip">AES-GCM + PQ wrap</div>
+            <div class="chip">7-pass delete</div>
+            <div class="chip">bucket cache</div>
+          </div>
+          <div class="small" style="margin-top:10px;">Use the media endpoints to store assets for carousel cards and tri-model chat avatars.</div>
         </div>
       </div>
 
@@ -10664,11 +10904,16 @@ def x_dashboard():
   const elBars = document.getElementById('bars');
   const elSummary = document.getElementById('summary');
   const elWeatherChips = document.getElementById('weatherChips');
+  const elPreviewStatus = document.getElementById('previewStatus');
+  const elModeStatus = document.getElementById('modeStatus');
+  const btnReveal = document.getElementById('btnReveal');
 
   let items = [];
   let idx = 0;
   let autoplay = false;
   let timer = null;
+  let safePreview = true;
+  let presentationMode = 'carousel';
 
   let timeboxLeft = 0;
   let timeboxActive = false;
@@ -10677,6 +10922,28 @@ def x_dashboard():
   function setStatus(s, level){
     elStatus.textContent = s;
     elStatus.classList.toggle('warn', level === 'warn');
+  }
+
+  function applyPreviewState(){
+    const targets = [elText, elBars, elSummary].filter(Boolean);
+    targets.forEach(el => {
+      el.classList.toggle('blurred', safePreview);
+      el.classList.toggle('reveal', !safePreview);
+    });
+    if(elPreviewStatus){
+      elPreviewStatus.textContent = safePreview ? 'Safe preview enabled' : 'Preview revealed';
+    }
+    if(btnReveal){
+      btnReveal.textContent = safePreview ? 'Reveal preview' : 'Hide preview';
+    }
+  }
+
+  function setMode(mode){
+    presentationMode = mode;
+    if(elModeStatus){
+      elModeStatus.textContent = `Active mode: ${mode}`;
+    }
+    setStatus(`Presentation mode: ${mode}`);
   }
 
   function barLine(name, v){
@@ -10713,6 +10980,7 @@ def x_dashboard():
       elText.textContent = 'No items yet. Fetch → Label → Build.';
       elBars.innerHTML = '';
       elSummary.textContent = '';
+      applyPreviewState();
       return;
     }
     idx = ((idx % items.length)+items.length)%items.length;
@@ -10756,6 +11024,7 @@ def x_dashboard():
     const tags = (it.tags || l.tags || []).slice(0,10).map(x=>`#${x}`).join(' ');
     const summaryText = it.summary || l.summary || '';
     elSummary.textContent = (summaryText ? `Summary: ${summaryText}` : '') + (tags ? `  •  ${tags}` : '');
+    applyPreviewState();
   }
 
   async function jpost(url, body){
@@ -10881,6 +11150,20 @@ def x_dashboard():
   document.getElementById('btnPrev').onclick = ()=>{ stepPrev(); if(autoplay){ stopAutoplay(); } };
   document.getElementById('btnPlay').onclick = ()=>{ autoplay ? stopAutoplay() : startAutoplay(); };
 
+  if(btnReveal){
+    btnReveal.onclick = ()=>{
+      safePreview = !safePreview;
+      applyPreviewState();
+    };
+  }
+
+  const btnModeReel = document.getElementById('modeReel');
+  const btnModeMosaic = document.getElementById('modeMosaic');
+  const btnModeTimeline = document.getElementById('modeTimeline');
+  if(btnModeReel){ btnModeReel.onclick = ()=> setMode('reel'); }
+  if(btnModeMosaic){ btnModeMosaic.onclick = ()=> setMode('mosaic'); }
+  if(btnModeTimeline){ btnModeTimeline.onclick = ()=> setMode('timeline'); }
+
   document.getElementById('btnStart').onclick = ()=>{
     const mins = Math.max(1, Math.min(240, parseInt(document.getElementById('timeboxMin').value||'15',10)||15));
     timeboxLeft = mins * 60;
@@ -10913,6 +11196,8 @@ def x_dashboard():
       });
     });
   });
+
+  applyPreviewState();
 })();
 </script>
 
@@ -11526,6 +11811,7 @@ def x_api_fetch():
             except Exception:
                 continue
 
+        jailbreak_meta = _x2_scan_and_blacklist(uid, safe_rows)
         n = _x2_db_upsert_tweets(uid, safe_rows)
 
         # Only return small, non-sensitive meta (avoid echoing payload/text)
@@ -11539,7 +11825,7 @@ def x_api_fetch():
         except Exception:
             safe_meta = {}
 
-        return jsonify({"ok": True, "count": int(n), "meta": safe_meta})
+        return jsonify({"ok": True, "count": int(n), "meta": safe_meta, "jailbreaks": jailbreak_meta})
     except Exception:
         try:
             logger.exception("x_api_fetch failed")  # type: ignore[name-defined]
@@ -11785,6 +12071,18 @@ def x_api_label():
     labeled = 0
     errors = 0
     try:
+        scan_batch = []
+        for tid in ids:
+            t = tweets_by_id.get(str(tid))
+            if t:
+                scan_batch.append(t)
+        jailbreak_meta = _x2_scan_and_blacklist(uid, scan_batch)
+        if jailbreak_meta.get("count", 0) > 0:
+            return jsonify({
+                "ok": False,
+                "error": "Jailbreak patterns detected. Review halted.",
+                "jailbreaks": jailbreak_meta,
+            }), 400
         for tid in ids:
             tid = clean_text(str(tid or ""), 64)
             if not tid:
