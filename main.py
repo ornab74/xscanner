@@ -10005,6 +10005,47 @@ def x_dashboard():
       background: linear-gradient(120deg, rgba(96,165,250,.22), rgba(52,211,153,.18));
       border:1px solid rgba(96,165,250,.22);
     }
+    .pipeline{display:grid; gap:10px;}
+    .stage{
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      padding:10px 12px; border-radius:14px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      font-size:12px; color:var(--muted);
+    }
+    .stage b{color:var(--txt); font-size:13px;}
+    .tag{
+      padding:4px 8px; border-radius:999px; font-size:11px;
+      border:1px solid rgba(255,255,255,.16); color:var(--muted);
+    }
+    .tag.live{color:#34d399; border-color: rgba(52,211,153,.45);}
+    .tag.wait{color:#fbbf24; border-color: rgba(251,191,36,.45);}
+    .tag.off{color:#fb7185; border-color: rgba(251,113,133,.45);}
+    .prompt-grid{display:grid; gap:12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));}
+    .prompt-card{
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(5,8,16,.55);
+      padding:12px; border-radius:14px;
+      display:flex; flex-direction:column; gap:8px;
+    }
+    .prompt-card code{
+      display:block; white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas;
+      color:#e2e8f0; font-size:12px;
+    }
+    .copy-btn{
+      align-self:flex-start;
+      padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.16);
+      background: rgba(255,255,255,.06); color:var(--txt); font-size:12px; cursor:pointer;
+    }
+    .stack{display:grid; gap:8px;}
+    .swatches{display:flex; gap:8px; flex-wrap:wrap;}
+    .swatch{
+      width:34px; height:34px; border-radius:12px; border:1px solid rgba(255,255,255,.12);
+      box-shadow: 0 10px 20px rgba(0,0,0,.35);
+    }
+    .mini{
+      font-size:11px; color:var(--muted);
+    }
   </style>
 </head>
 <body>
@@ -10086,6 +10127,43 @@ def x_dashboard():
       </div>
 
       <div class="card">
+        <h3>Risk Scanner Pipeline</h3>
+        <div class="body">
+          <div class="small">Pipeline the risk scanner into the X dashboard lattice for consistent scoring + tri-LLM consensus.</div>
+          <div class="hr"></div>
+          <div class="pipeline">
+            <div class="stage">
+              <div><b>Ingest</b><div class="mini">X stream → topic filters → SSR cache</div></div>
+              <span class="tag live">live</span>
+            </div>
+            <div class="stage">
+              <div><b>Weaviate Embed</b><div class="mini">vectorize posts + route context + safety hints</div></div>
+              <span class="tag wait">queued</span>
+            </div>
+            <div class="stage">
+              <div><b>Tri-LLM Vote</b><div class="mini">OpenAI • Grok • Llama (local)</div></div>
+              <span class="tag live">sync</span>
+            </div>
+            <div class="stage">
+              <div><b>Risk Dial</b><div class="mini">harm → urgency → driver calm overlay</div></div>
+              <span class="tag wait">staged</span>
+            </div>
+            <div class="stage">
+              <div><b>Carousel Output</b><div class="mini">colorized summary + tags + replay dwell</div></div>
+              <span class="tag live">ready</span>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="chipset">
+            <div class="chip">Route risk lanes</div>
+            <div class="chip">Evidence traces</div>
+            <div class="chip">Anomaly heat</div>
+            <div class="chip">Trust decay</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <h3>Carousel</h3>
         <div class="tweet">
           <div class="meta" id="meta">—</div>
@@ -10105,6 +10183,34 @@ def x_dashboard():
           </div>
         </div>
       </div>
+
+      <div class="card">
+        <h3>Prompt Forge (Tri-LLM)</h3>
+        <div class="body">
+          <div class="small">New prompts tuned for OpenAI, Grok, and Local Llama to expand the X dashboard signal surface.</div>
+          <div class="hr"></div>
+          <div class="prompt-grid">
+            <div class="prompt-card">
+              <strong>OpenAI • Colorize X Posts</strong>
+              <code data-prompt="openai">You are the Color Weave engine. Map each post to a 3-stop gradient (primary, accent, glow) based on emotion + risk + novelty. Output JSON with {primary, accent, glow, rationale, tags}.</code>
+              <button class="copy-btn" data-copy="openai">Copy prompt</button>
+            </div>
+            <div class="prompt-card">
+              <strong>Grok • Color Mixing Lab</strong>
+              <code data-prompt="grok">You are the X spectrum mixer. Blend route risk signals into a single chroma recipe: {base_hex, highlight_hex, pulse_hex, mixing_notes}. Ensure contrast for night mode and emphasize urgent posts.</code>
+              <button class="copy-btn" data-copy="grok">Copy prompt</button>
+            </div>
+            <div class="prompt-card">
+              <strong>Llama • Find New Posts</strong>
+              <code data-prompt="llama">You are the discovery sweeper. Suggest 6 query strings that surface fresh, high-signal posts for the current corridor. Output JSON list of {query, rationale, freshness_window}.</code>
+              <button class="copy-btn" data-copy="llama">Copy prompt</button>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="small">Prompt outputs feed the pipeline cards above and sync with carousel color tags.</div>
+        </div>
+      </div>
+
       <div class="card">
         <h3>X Feed Next Ideas</h3>
         <div class="body">
@@ -10114,12 +10220,81 @@ def x_dashboard():
               <li><strong>Hazard authority weighting:</strong> score posts higher when they cite DOT, weather, or responder sources.</li>
               <li><strong>Signal decay lanes:</strong> auto-archive items as they age, with a recency shelf for live alerts.</li>
               <li><strong>Driver calm mode:</strong> soften language + color for high stress windows to reduce panic.</li>
+              <li><strong>Weaviate weave:</strong> embed every post + risk snapshot into a vector lattice for clustering.</li>
             </ol>
           </div>
           <div class="hr"></div>
           <div class="small">
             Set <span class="kbd">RGN_X_TEST_API=synthetic</span> or a test URL to inject synthetic feed data for validation.
           </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Weaviate Embed Lab</h3>
+        <div class="body">
+          <div class="stack">
+            <div class="small">Embed X posts into Weaviate-style vectors for clustering, recency search, and risk triangulation.</div>
+            <div class="row">
+              <span class="pill">Index: <span class="kbd">x_posts_v2</span></span>
+              <span class="pill">Distance: <span class="kbd">cosine</span></span>
+              <span class="pill">TopK: <span class="kbd">48</span></span>
+            </div>
+            <div class="hr"></div>
+            <div class="chipset">
+              <div class="chip">Auto-embed on ingest</div>
+              <div class="chip">Route anchor vectors</div>
+              <div class="chip">Recall high-signal clusters</div>
+              <div class="chip">Rerank with safety tags</div>
+            </div>
+            <div class="small">Use embeddings to drive risk scanner hints + carousel ordering.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Color Mixer</h3>
+        <div class="body">
+          <div class="small">Colorize posts based on sentiment, urgency, and novelty. Blend palettes for the X AI dashboard.</div>
+          <div class="hr"></div>
+          <div class="swatches">
+            <div class="swatch" style="background:#60A5FA;"></div>
+            <div class="swatch" style="background:#34D399;"></div>
+            <div class="swatch" style="background:#F472B6;"></div>
+            <div class="swatch" style="background:#FBBF24;"></div>
+            <div class="swatch" style="background:#22D3EE;"></div>
+            <div class="swatch" style="background:#A78BFA;"></div>
+          </div>
+          <div class="hr"></div>
+          <div class="chipset">
+            <div class="chip">Risk → Warmth shift</div>
+            <div class="chip">Novelty → Glow boost</div>
+            <div class="chip">Negativity → Saturation clamp</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Discovery Radar</h3>
+        <div class="body">
+          <div class="small">Continuous scouting for new posts, reply spikes, and emergent topics.</div>
+          <div class="hr"></div>
+          <div class="pipeline">
+            <div class="stage">
+              <div><b>New posts sweep</b><div class="mini">minute-level scanning for corridor mentions</div></div>
+              <span class="tag live">armed</span>
+            </div>
+            <div class="stage">
+              <div><b>Reply storm watch</b><div class="mini">detect fast-moving conversational spikes</div></div>
+              <span class="tag wait">warming</span>
+            </div>
+            <div class="stage">
+              <div><b>Topic drift</b><div class="mini">monitor sentiment + risk delta per hour</div></div>
+              <span class="tag off">idle</span>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="small">Insights flow into the carousel tags and risk lane weighting.</div>
         </div>
       </div>
     </div>
@@ -10399,6 +10574,22 @@ def x_dashboard():
       setStatus('Secrets cleared. Refresh to see blank fields.');
     }catch(e){ setStatus('Clear error: '+e.message, 'warn'); }
   };
+
+  document.querySelectorAll('.copy-btn').forEach((btn)=>{
+    btn.addEventListener('click', ()=>{
+      const key = btn.getAttribute('data-copy');
+      const code = document.querySelector(`code[data-prompt="${key}"]`);
+      if(!code) return;
+      const text = code.textContent || '';
+      navigator.clipboard?.writeText(text).then(()=>{
+        btn.textContent = 'Copied';
+        setTimeout(()=>{ btn.textContent = 'Copy prompt'; }, 1200);
+      }).catch(()=>{
+        btn.textContent = 'Copy failed';
+        setTimeout(()=>{ btn.textContent = 'Copy prompt'; }, 1400);
+      });
+    });
+  });
 })();
 </script>
 
