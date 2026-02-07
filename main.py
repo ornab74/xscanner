@@ -120,6 +120,16 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 app = Flask(__name__)
+BLOG_DISABLED = True
+
+@app.before_request
+def _block_blog_routes():
+    if not BLOG_DISABLED:
+        return None
+    path = request.path or ""
+    if path.startswith("/blog") or path.startswith("/admin/blog") or path.startswith("/settings/blog"):
+        abort(404)
+    return None
 
 class _StartupOnceMiddleware:
     def __init__(self, wsgi_app):
@@ -3780,9 +3790,9 @@ def blog_index():
   <meta charset="utf-8">
   <title>QRS - Blog</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-roboto/1.1.13/index.min.css" rel="stylesheet" integrity="sha384-2V4P1oTyWcCwZqZ9LP8y8QL4mFQZVfrSez2yYcXgD1hlXQW2K9eK7oV5L9c3NPGp" crossorigin="anonymous">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-orbitron/1.1.13/index.min.css" rel="stylesheet" integrity="sha384-Wk0o7Q4V2rHh0sR7T5pQKZ8xU3Y6JXb5w2aG3Jr0r8GkP6gI7lqV9GqV2o2r3ZxA" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
   <style>
     :root{ --accent: {{ accent }}; }
     body{ background:#0b0f17; color:#eaf5ff; font-family:'Roboto',sans-serif; }
@@ -3851,9 +3861,9 @@ def blog_view(slug: str):
   <meta charset="utf-8">
   <title>{{ post['title'] }} - QRS Blog</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-roboto/1.1.13/index.min.css" rel="stylesheet" integrity="sha384-2V4P1oTyWcCwZqZ9LP8y8QL4mFQZVfrSez2yYcXgD1hlXQW2K9eK7oV5L9c3NPGp" crossorigin="anonymous">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-orbitron/1.1.13/index.min.css" rel="stylesheet" integrity="sha384-Wk0o7Q4V2rHh0sR7T5pQKZ8xU3Y6JXb5w2aG3Jr0r8GkP6gI7lqV9GqV2o2r3ZxA" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
   <style>
     :root{ --accent: {{ accent }}; }
     body{ background:#0b0f17; color:#eaf5ff; font-family:'Roboto',sans-serif; }
@@ -3965,8 +3975,8 @@ def blog_admin():
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
 
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-        integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
 
   <style>
     body{background:#0b0f17;color:#eaf5ff}
@@ -4519,8 +4529,8 @@ def admin_blog_backup_page():
   <meta charset="UTF-8">
   <title>Admin - Blog Backup</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-        integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
 </head>
 <body class="bg-dark text-light">
 <div class="container py-4">
@@ -4635,8 +4645,8 @@ def admin_local_llm_page():
   <meta charset="UTF-8">
   <title>Admin - Local Llama</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-        integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
 </head>
 <body class="bg-dark text-light">
 <div class="container py-4">
@@ -7721,874 +7731,11 @@ class ReportForm(FlaskForm):
 
 @app.route('/')
 def index():
-    return redirect(url_for('home'))
+    return redirect(url_for('x_dashboard'))
 
 @app.route('/home')
 def home():
-    seed = colorsync.sample()
-    seed_hex = seed.get("hex", "#49c2ff")
-    seed_code = seed.get("qid25", {}).get("code", "B2")
-    csrf_token = generate_csrf()
-
-    # Admin-configurable flags (mirrored to env by /settings; DB is source of truth)
-    try:
-        with sqlite3.connect(DB_FILE) as db:
-            dual_readings_ui = str(get_admin_setting(db, "DUAL_READINGS", os.getenv("DUAL_READINGS","0"))).strip().lower() in ("1","true","yes","on")
-            use_grok_ui = str(get_admin_setting(db, "USE_GROK", os.getenv("USE_GROK","1"))).strip().lower() in ("1","true","yes","on")
-            use_chatgpt_ui = str(get_admin_setting(db, "USE_CHATGPT", os.getenv("USE_CHATGPT","1"))).strip().lower() in ("1","true","yes","on")
-    except Exception:
-        dual_readings_ui = str(os.getenv("DUAL_READINGS","0")).strip().lower() in ("1","true","yes","on")
-        use_grok_ui = str(os.getenv("USE_GROK","1")).strip().lower() in ("1","true","yes","on")
-        use_chatgpt_ui = str(os.getenv("USE_CHATGPT","1")).strip().lower() in ("1","true","yes","on")
-    try:
-        posts = blog_list_home(limit=3)
-    except Exception:
-        posts = []
-    return render_template_string("""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>QRoadScan.com | Live Traffic Risk Map and Road Hazard Alerts </title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="QRoadScan.com turns complex driving signals into a simple live risk colorwheel. Get traffic risk insights, road hazard awareness, and smarter safety decisions with a calming, perceptual visual that updates in real time." />
-  <meta name="keywords" content="QRoadScan, live traffic risk, road hazard alerts, driving safety, AI traffic insights, risk meter, traffic risk map, smart driving, predictive road safety, real-time hazard detection, safe route planning, road conditions, commute safety, accident risk, driver awareness" />
-  <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
-  <meta name="theme-color" content="{{ seed_hex }}" />
-  <meta name="csrf-token" content="{{ csrf_token }}" />
-  <link rel="canonical" href="{{ request.url }}" />
-  <meta property="og:type" content="website" />
-  <meta property="og:site_name" content="QRoadScan.com" />
-  <meta property="og:title" content="QRoadScan.com | Live Traffic Risk & Road Hazard Intelligence" />
-  <meta property="og:description" content="A live risk colorwheel that helps you read the road at a glance. Real-time safety signals, calm visuals, smarter driving decisions." />
-  <meta property="og:url" content="{{ request.url }}" />
-  
-  <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="QRoadScan.com | Live Traffic Risk & Road Hazard Intelligence" />
-  <meta name="twitter:description" content="See risk instantly with the QRoadScan Colorwheel. Safer decisions, calmer driving." />
-  
-
-  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-
-  <script type="application/ld+json">
-  {
-    "@context":"https://schema.org",
-    "@type":"WebSite",
-    "name":"QRoadScan.com",
-    "url":"https://qroadscan.com/",
-    "description":"Live traffic risk and road hazard intelligence visualized as a calming, perceptual colorwheel.",
-    "publisher":{
-      "@type":"Organization",
-      "name":"QRoadScan.com",
-      "url":"https://qroadscan.com/"
-    },
-    "potentialAction":{
-      "@type":"SearchAction",
-      "target":"https://qroadscan.com/blog?q={search_term_string}",
-      "query-input":"required name=search_term_string"
-    }
-  }
-  </script>
-
-  <style>
-    :root{
-      --bg1:#0b0f17; --bg2:#0d1423; --bg3:#0b1222;
-      --ink:#eaf5ff; --sub:#b8cfe4; --muted:#95b2cf;
-      --glass:#ffffff14; --stroke:#ffffff22;
-      --accent: {{ seed_hex }};
-      --radius:18px;
-      --halo-alpha:.28; --halo-blur:1.05; --glow-mult:1.0; --sweep-speed:.12;
-      --shadow-lg: 0 24px 70px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
-    }
-    @media (prefers-color-scheme: light){
-      :root{ --bg1:#eef2f7; --bg2:#e5edf9; --bg3:#dde7f6; --ink:#0b1726; --sub:#37536e; --muted:#5a7b97; --glass:#00000010; --stroke:#00000018; }
-    }
-    html,body{height:100%}
-    body{
-      background:
-        radial-gradient(1200px 700px at 10% -20%, color-mix(in oklab, var(--accent) 9%, var(--bg2)), var(--bg1) 58%),
-        radial-gradient(1200px 900px at 120% -20%, color-mix(in oklab, var(--accent) 12%, transparent), transparent 62%),
-        linear-gradient(135deg, var(--bg1), var(--bg2) 45%, var(--bg1));
-      color:var(--ink);
-      font-family: 'Roboto', ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
-      -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
-      overflow-x:hidden;
-    }
-    .nebula{
-      position:fixed; inset:-12vh -12vw; pointer-events:none; z-index:-1;
-      background:
-        radial-gradient(600px 320px at 20% 10%, color-mix(in oklab, var(--accent) 18%, transparent), transparent 65%),
-        radial-gradient(800px 400px at 85% 12%, color-mix(in oklab, var(--accent) 13%, transparent), transparent 70%),
-        radial-gradient(1200px 600px at 50% -10%, #ffffff10, #0000 60%);
-      animation: drift 30s ease-in-out infinite alternate;
-      filter:saturate(120%);
-    }
-    @keyframes drift{ from{transform:translateY(-0.5%) scale(1.02)} to{transform:translateY(1.2%) scale(1)} }
-    .navbar{
-      background: color-mix(in srgb, #000 62%, transparent);
-      backdrop-filter: saturate(140%) blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      border-bottom: 1px solid var(--stroke);
-    }
-    .navbar-brand{ font-family:'Orbitron',sans-serif; letter-spacing:.5px; }
-    .hero{
-      position:relative; border-radius:calc(var(--radius) + 10px);
-      background: color-mix(in oklab, var(--glass) 96%, transparent);
-      border: 1px solid var(--stroke);
-      box-shadow: var(--shadow-lg);
-      overflow:hidden;
-    }
-    .hero::after{
-      content:""; position:absolute; inset:-35%;
-      background:
-        radial-gradient(40% 24% at 20% 10%, color-mix(in oklab, var(--accent) 32%, transparent), transparent 60%),
-        radial-gradient(30% 18% at 90% 0%, color-mix(in oklab, var(--accent) 18%, transparent), transparent 65%);
-      filter: blur(36px); opacity:.44; pointer-events:none;
-      animation: hueFlow 16s ease-in-out infinite alternate;
-    }
-    @keyframes hueFlow{ from{transform:translateY(-2%) rotate(0.3deg)} to{transform:translateY(1.6%) rotate(-0.3deg)} }
-    .hero-title{
-      font-family:'Orbitron',sans-serif; font-weight:900; line-height:1.035; letter-spacing:.25px;
-      background: linear-gradient(90deg,#e7f3ff, color-mix(in oklab, var(--accent) 60%, #bfe3ff), #e7f3ff);
-      -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-    }
-    .lead-soft{ color:var(--sub); font-size:1.06rem }
-    .card-g{
-      background: color-mix(in oklab, var(--glass) 94%, transparent);
-      border:1px solid var(--stroke); border-radius: var(--radius); box-shadow: var(--shadow-lg);
-    }
-    .wheel-wrap{ display:grid; grid-template-columns: minmax(320px,1.1fr) minmax(320px,1fr); gap:26px; align-items:stretch }
-    @media(max-width: 992px){ .wheel-wrap{ grid-template-columns: 1fr } }
-    .wheel-grid{display:grid; gap:14px; grid-template-columns:1fr;}
-    @media (min-width: 992px){ .wheel-grid{grid-template-columns:1fr 1fr;} }
-    .wheel-panel{
-
-      position:relative; border-radius: calc(var(--radius) + 10px);
-      background: linear-gradient(180deg, #ffffff10, #0000001c);
-      border:1px solid var(--stroke); overflow:hidden; box-shadow: var(--shadow-lg);
-      perspective: 1500px; transform-style: preserve-3d;
-      aspect-ratio: 1 / 1;
-      min-height: clamp(300px, 42vw, 520px);
-    }
-    .wheel-hud{ position:absolute; inset:14px; border-radius:inherit; display:grid; place-items:center; }
-    canvas#wheelCanvas, canvas#wheelCanvas2{ width:100%; height:100%; display:block; }
-    .wheel-halo{ position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; }
-    .wheel-halo .halo{
-      width:min(70%, 420px); aspect-ratio:1; border-radius:50%;
-      filter: blur(calc(30px * var(--halo-blur, .9))) saturate(112%);
-      opacity: var(--halo-alpha, .32);
-      background: radial-gradient(50% 50% at 50% 50%,
-        color-mix(in oklab, var(--accent) 75%, #fff) 0%,
-        color-mix(in oklab, var(--accent) 24%, transparent) 50%,
-        transparent 66%);
-      transition: filter .25s ease, opacity .25s ease;
-    }
-    .hud-center{ position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; text-align:center }
-    .hud-ring{
-      position:absolute; width:58%; aspect-ratio:1; border-radius:50%;
-      background: radial-gradient(48% 48% at 50% 50%, #ffffff22, #ffffff05 60%, transparent 62%),
-                  conic-gradient(from 140deg, #ffffff13, #ffffff05 65%, #ffffff13);
-      filter:saturate(110%);
-      box-shadow: 0 0 calc(22px * var(--glow-mult, .9)) color-mix(in srgb, var(--accent) 35%, transparent);
-    }
-    .hud-number{
-      font-size: clamp(2.3rem, 5.2vw, 3.6rem); font-weight:900; letter-spacing:-.02em;
-      background: linear-gradient(180deg, #fff, color-mix(in oklab, var(--accent) 44%, #cfeaff));
-      -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-      text-shadow: 0 2px 24px color-mix(in srgb, var(--accent) 22%, transparent);
-    }
-    .hud-label{
-      font-weight:800; color: color-mix(in oklab, var(--accent) 85%, #d8ecff);
-      text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; opacity:.95;
-    }
-    .hud-note{ color:var(--muted); font-size:.95rem; max-width:28ch }
-    .pill{ padding:.28rem .66rem; border-radius:999px; background:#ffffff18; border:1px solid var(--stroke); font-size:.85rem }
-    .list-clean{margin:0; padding-left:1.2rem}
-    .list-clean li{ margin:.42rem 0; color:var(--sub) }
-    .cta{
-      background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 70%, #7ae6ff), color-mix(in oklab, var(--accent) 50%, #2bd1ff));
-      color:#07121f; font-weight:900; border:0; padding:.85rem 1rem; border-radius:12px;
-      box-shadow: 0 12px 24px color-mix(in srgb, var(--accent) 30%, transparent);
-    }
-    .meta{ color:var(--sub); font-size:.95rem }
-    .debug{
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size:.85rem; white-space:pre-wrap; max-height:240px; overflow:auto;
-      background:#0000003a; border-radius:12px; padding:10px; border:1px dashed var(--stroke);
-    }
-    .blog-grid{ display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:14px; }
-    @media(max-width: 992px){ .blog-grid{ grid-template-columns: 1fr; } }
-    .blog-card{ padding:16px; border-radius:16px; border:1px solid var(--stroke); background: color-mix(in oklab, var(--glass) 92%, transparent); box-shadow: var(--shadow-lg); }
-    .blog-card a{ color:var(--ink); text-decoration:none; font-weight:900; }
-    .blog-card a:hover{ text-decoration:underline; }
-    .kicker{ letter-spacing:.14em; text-transform:uppercase; font-weight:900; font-size:.78rem; color: color-mix(in oklab, var(--accent) 80%, #cfeaff); }
-    .lottery-card{
-      margin-top:1.2rem;
-      padding:1.2rem;
-      border-radius:18px;
-      border:1px solid var(--stroke);
-      background: linear-gradient(135deg, #0f1b2e, #0a1222);
-      box-shadow: 0 16px 40px rgba(0,0,0,.45);
-      position:relative;
-      overflow:hidden;
-    }
-    .lottery-card::after{
-      content:""; position:absolute; inset:-40%;
-      background: radial-gradient(120px 120px at 20% 20%, color-mix(in oklab, var(--accent) 40%, transparent), transparent 60%),
-                  radial-gradient(180px 180px at 80% 0%, color-mix(in oklab, var(--accent) 25%, transparent), transparent 65%);
-      opacity:.5; filter: blur(30px); pointer-events:none;
-      animation: hueFlow 18s ease-in-out infinite alternate;
-    }
-    .btn-quantum{
-      position:relative;
-      overflow:hidden;
-      border:0;
-      padding:.8rem 1.1rem;
-      font-weight:900;
-      letter-spacing:.06em;
-      text-transform:uppercase;
-      color:#04131f;
-      background: linear-gradient(120deg, #7ff0ff, color-mix(in oklab, var(--accent) 70%, #8ef2c0), #ffd1ff);
-      box-shadow: 0 10px 26px color-mix(in srgb, var(--accent) 35%, transparent);
-      border-radius:14px;
-    }
-    .btn-quantum::before{
-      content:""; position:absolute; inset:-200% 0;
-      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.5) 45%, transparent 70%);
-      transform: translateX(-60%);
-      animation: shimmer 2.8s ease-in-out infinite;
-      opacity:.75;
-    }
-    .btn-quantum:disabled{ opacity:.6; cursor:not-allowed; }
-    .lottery-result{
-      margin-top:.75rem;
-      padding:.6rem .8rem;
-      border-radius:12px;
-      background:#0a1624;
-      border:1px dashed var(--stroke);
-      color:var(--sub);
-      position:relative;
-      z-index:1;
-    }
-    .lottery-code{
-      display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;
-      margin-top:.75rem; padding:.6rem .8rem;
-      border-radius:12px;
-      background:#071521;
-      border:1px solid color-mix(in oklab, var(--accent) 50%, transparent);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      color:#d8f5ff;
-      position:relative;
-      z-index:1;
-    }
-    .lottery-code button{
-      border:0; padding:.35rem .65rem; border-radius:10px;
-      background: color-mix(in oklab, var(--accent) 55%, #77ffb3);
-      color:#04131f; font-weight:800;
-    }
-    @keyframes shimmer{ 0%{transform:translateX(-60%)} 100%{transform:translateX(60%)} }
-  </style>
-</head>
-<body>
-  <div class="nebula" aria-hidden="true"></div>
-
-  <nav class="navbar navbar-expand-lg navbar-dark">
-    <a class="navbar-brand" href="{{ url_for('home') }}">QRoadScan.com</a>
-    <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#nav"><span class="navbar-toggler-icon"></span></button>
-    <div id="nav" class="collapse navbar-collapse justify-content-end">
-      <ul class="navbar-nav">
-        <li class="nav-item"><a class="nav-link" href="{{ url_for('home') }}">Home</a></li>
-        <li class="nav-item"><a class="nav-link" href="{{ url_for('blog_index') }}">Blog</a></li>
-        {% if 'username' in session %}
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a></li>
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('logout') }}">Logout</a></li>
-        {% else %}
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('login') }}">Login</a></li>
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('register') }}">Register</a></li>
-        {% endif %}
-      </ul>
-    </div>
-  </nav>
-
-  <main class="container py-5">
-    <section class="hero p-4 p-md-5 mb-4">
-      <div class="row align-items-center">
-        <div class="col-lg-7">
-          <div class="kicker">Live traffic risk and road hazard awareness.</div>
-          <h1 class="hero-title display-5 mt-2">The Live Safety Colorwheel for Smarter Driving</h1>
-          <p class="lead-soft mt-3">
-            QRoadScan.com turns noisy signals into a single, readable answer: a smooth risk dial that shifts from calm green to caution amber to alert red.
-            Our scans are designed for fast comprehension, low stress, and real-world clarity. Watch the wheel move when your road conditions change, then jump into your dashboard
-            for deeper insights once signed up.
-          </p>
-          <div class="d-flex flex-wrap align-items-center mt-3" style="gap:.6rem">
-            <a class="btn cta" href="{{ url_for('dashboard') }}">Open Dashboard</a>
-            <a class="btn btn-outline-light" href="{{ url_for('blog_index') }}">Read the Blog</a>
-            <span class="pill">Accent tone: {{ seed_code }}</span>
-            <span class="pill">Live risk preview</span>
-            <span class="pill">Perceptual color ramp</span>
-          </div>
-          <div class="lottery-card">
-            <div class="kicker">Invite Code Lottery</div>
-            <h3 class="h5 mb-1">Signal Draw</h3>
-            <p class="meta mb-2">Closed beta invites surface through persistence. Keep rolling to earn access.</p>
-            <button class="btn-quantum" id="lotteryBtn">Draw Invite Signal</button>
-            <div class="lottery-result" id="lotteryResult">The lattice is idle. Pull the signal to begin.</div>
-            <div class="lottery-code" id="lotteryCode" style="display:none">
-              <span>Invite Code</span>
-              <code id="lotteryCodeValue"></code>
-              <button type="button" id="lotteryCopy">Copy</button>
-            </div>
-          </div>
-          <div class="mt-4">
-            <ul class="list-clean">
-              <li><strong>Traffic risk at a glance</strong> with a perceptual monitoring.</li>
-              <li><strong>Road hazard awareness</strong> surfaced as simple reasons you can understand instantly.</li>
-              <li><strong>Calm-by-design visuals</strong> Use of.color to display hazards and road conditions.</li>
-            </ul>
-          </div>
-        </div>
-
-        <div class="col-lg-5 mt-4 mt-lg-0">
-          <div class="wheel-grid">
-            <div class="wheel-panel" id="wheelPanel" aria-label="Primary risk dial">
-              <div class="wheel-hud">
-                <canvas id="wheelCanvas"></canvas>
-                <div class="wheel-halo" aria-hidden="true"><div class="halo"></div></div>
-                <div class="hud-center">
-                  <div class="hud-ring"></div>
-                  <div class="text-center">
-                    <div class="hud-number" id="hudNumber">--%</div>
-                    <div class="hud-label" id="hudLabel">INITIALIZING</div>
-                    <div class="hud-note" id="hudNote">Calibrating preview</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {% if dual_readings_ui %}
-            <div class="wheel-panel" id="wheelPanel2" aria-label="Secondary risk dial">
-              <div class="wheel-hud">
-                <canvas id="wheelCanvas2"></canvas>
-                <div class="wheel-halo" aria-hidden="true"><div class="halo"></div></div>
-                <div class="hud-center">
-                  <div class="hud-ring"></div>
-                  <div class="text-center">
-                    <div class="hud-number" id="hudNumber2">--%</div>
-                    <div class="hud-label" id="hudLabel2">SECONDARY</div>
-                    <div class="hud-note" id="hudNote2">Waiting for reading</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            {% endif %}
-          </div>
-
-          <p class="meta mt-2">Tip: if your OS has Reduce Motion enabled, animations automatically soften.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="card-g p-4 p-md-5 mb-4">
-      <div class="wheel-wrap">
-        <div>
-          <h2 class="mb-2">How QRoadScan reads risk</h2>
-          <p class="meta">
-            This preview shows the QRoadScan risk colorwheel using simulated reading.
-            The wheel is intentionally simple: it translates complex inputs into one number, one label, and a few reasons.
-            Advanced routing and deeper trip intelligence live inside the dashboard after login.
-          </p>
-          <div class="d-flex flex-wrap align-items-center mt-3" style="gap:.7rem">
-            <button id="btnRefresh" class="btn btn-sm btn-outline-light">Refresh</button>
-            <button id="btnAuto" class="btn btn-sm btn-outline-light" aria-pressed="true">Auto: On</button>
-            <button id="btnDebug" class="btn btn-sm btn-outline-light" aria-pressed="false">Debug: Off</button>
-            {% if 'username' not in session %}
-              <a class="btn btn-sm btn-light" href="{{ url_for('register') }}">Create Account</a>
-            {% endif %}
-          </div>
-
-          <div class="mt-4">
-            <div class="kicker">Best-performing homepage phrases</div>
-            <ul class="list-clean mt-2">
-              <li><strong>Live Traffic Risk Colorwheel</strong> that updates without noise.</li>
-              <li><strong>Road Hazard Alerts</strong> explained in plain language.</li>
-              <li><strong>AI Driving Safety Insights</strong> designed for calm decisions.</li>
-              <li><strong>Real-Time Commute Safety</strong> with a perceptual risk meter.</li>
-              <li><strong>Predictive Road Safety</strong> you can understand at a glance.</li>
-            </ul>
-          </div>
-        </div>
-
-        <div>
-          <div class="card-g p-3">
-            <div class="d-flex justify-content-between align-items-center">
-              <strong>Why this reading</strong>
-              <span class="pill" id="confidencePill" title="Model confidence">Conf: --%</span>
-            </div>
-            <ul class="list-clean mt-2" id="reasonsList">
-              <li>Waiting for risk signal</li>
-            </ul>
-            <div id="debugBox" class="debug mt-3" style="display:none">debug</div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="card-g p-4 p-md-5 mb-4">
-      <div class="row g-4">
-        <div class="col-md-4">
-          <h3 class="h5">Perceptual color ramp</h3>
-          <p class="meta">The dial blends colors so equal changes feel equal, helping you read risk quickly without visual surprises.</p>
-        </div>
-        <div class="col-md-4">
-          <h3 class="h5">Breathing halo</h3>
-          <p class="meta">Breath rate and glow follow risk and confidence, so calm conditions look calm and elevated conditions feel urgent without panic.</p>
-        </div>
-        <div class="col-md-4">
-          <h3 class="h5">Privacy-forward design</h3>
-          <p class="meta">The public preview stays minimal. Your deeper trip intelligence and personalized routing live inside the dashboard after login.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="card-g p-4 p-md-5">
-      <div class="d-flex justify-content-between align-items-end flex-wrap" style="gap:10px">
-        <div>
-          <div class="kicker">Latest from the QRoadScan Blog</div>
-          <h2 class="mb-1">Traffic safety, hazard research, and product updates</h2>
-          <p class="meta mb-0">Short reads that explain how risk signals work, how to drive calmer, and what is new on QRoadScan.com.</p>
-        </div>
-        <a class="btn btn-outline-light" href="{{ url_for('blog_index') }}">View all posts</a>
-      </div>
-
-      <div class="blog-grid mt-4">
-        {% if posts and posts|length > 0 %}
-          {% for p in posts %}
-            <article class="blog-card">
-              <a href="{{ url_for('blog_view', slug=p.get('slug')) }}">{{ p.get('title', 'Blog post') }}</a>
-              {% if p.get('created_at') %}
-                <div class="meta mt-1">{{ p.get('created_at') }}</div>
-              {% endif %}
-              {% if p.get('excerpt') or p.get('summary') %}
-                <p class="meta mt-2 mb-0">{{ (p.get('excerpt') or p.get('summary')) }}</p>
-              {% else %}
-                <p class="meta mt-2 mb-0">Read the latest on traffic risk, road hazards, and safer driving decisions.</p>
-              {% endif %}
-            </article>
-          {% endfor %}
-        {% else %}
-          <div class="blog-card">
-            <a href="{{ url_for('blog_index') }}">Visit the blog</a>
-            <p class="meta mt-2 mb-0">Fresh posts are publishing soon. Tap in for road safety tips and QRoadScan updates.</p>
-          </div>
-          <div class="blog-card">
-            <a href="{{ url_for('register') }}">Create your account</a>
-            <p class="meta mt-2 mb-0">Unlock the dashboard experience for deeper driving intelligence and personalized tools.</p>
-          </div>
-          <div class="blog-card">
-            <a href="{{ url_for('home') }}">Explore the live colorwheel</a>
-            <p class="meta mt-2 mb-0">Watch the wheel breathe with the latest reading and learn how the risk meter works.</p>
-          </div>
-        {% endif %}
-      </div>
-    </section>
-  </main>
-
-  <script src="{{ url_for('static', filename='js/jquery.min.js') }}" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
-  <script src="{{ url_for('static', filename='js/popper.min.js') }}" integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
-  <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}" integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
-
-  <script>
-  const $ = (s, el=document)=>el.querySelector(s);
-  const clamp01 = x => Math.max(0, Math.min(1, x));
-  const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const MIN_UPDATE_MS = 60 * 1000;
-  let lastApplyAt = 0;
-  const current = { harm:0, last:null };
-
-  (async function themeSync(){
-    try{
-      const r=await fetch('/api/theme/personalize', {credentials:'same-origin'});
-      const j=await r.json();
-      if(j && j.hex) document.documentElement.style.setProperty('--accent', j.hex);
-    }catch(e){}
-  })();
-
-  (function ensureWheelSize(){
-    const panel = document.getElementById('wheelPanel');
-    if(!panel) return;
-    function fit(){
-      const w = panel.clientWidth || panel.offsetWidth || 0;
-      const ch = parseFloat(getComputedStyle(panel).height) || 0;
-      if (ch < 24 && w > 0) panel.style.height = w + 'px';
-    }
-    new ResizeObserver(fit).observe(panel);
-    fit();
-  })();
-
-  (function parallax(){
-    const panel = $('#wheelPanel'); if(!panel) return;
-    let rx=0, ry=0, vx=0, vy=0;
-    const damp = prefersReduced? .18 : .08;
-    const update=()=>{
-      vx += (rx - vx)*damp; vy += (ry - vy)*damp;
-      panel.style.transform = `rotateX(${vy}deg) rotateY(${vx}deg)`;
-      requestAnimationFrame(update);
-    };
-    update();
-    panel.addEventListener('pointermove', e=>{
-      const r=panel.getBoundingClientRect();
-      const nx = (e.clientX - r.left)/r.width*2 - 1;
-      const ny = (e.clientY - r.top)/r.height*2 - 1;
-      rx = ny * 3.5; ry = -nx * 3.5;
-    });
-    panel.addEventListener('pointerleave', ()=>{ rx=0; ry=0; });
-  })();
-
-  class BreathEngine {
-    constructor(){
-      this.rateHz = 0.10;
-      this.amp    = 0.55;
-      this.sweep  = 0.12;
-      this._rateTarget=this.rateHz; this._ampTarget=this.amp; this._sweepTarget=this.sweep;
-      this.val    = 0.7;
-    }
-    setFromRisk(risk, {confidence=1}={}){
-      risk = clamp01(risk||0); confidence = clamp01(confidence);
-      this._rateTarget = prefersReduced ? (0.05 + 0.03*risk) : (0.06 + 0.16*risk);
-      const baseAmp = prefersReduced ? (0.35 + 0.20*risk) : (0.35 + 0.55*risk);
-      this._ampTarget = baseAmp * (0.70 + 0.30*confidence);
-      this._sweepTarget = prefersReduced ? (0.06 + 0.06*risk) : (0.08 + 0.16*risk);
-    }
-    tick(){
-      const t = performance.now()/1000;
-      const k = prefersReduced ? 0.08 : 0.18;
-      this.rateHz += (this._rateTarget - this.rateHz)*k;
-      this.amp    += (this._ampTarget - this.amp   )*k;
-      this.sweep  += (this._sweepTarget- this.sweep )*k;
-      const base  = 0.5 + 0.5 * Math.sin(2*Math.PI*this.rateHz * t);
-      const depth = 0.85 + 0.15 * Math.sin(2*Math.PI*this.rateHz * 0.5 * t);
-      const tremorAmt = prefersReduced ? 0 : (Math.max(0, current.harm - 0.75) * 0.02);
-      const tremor = tremorAmt * Math.sin(2*Math.PI*8 * t);
-      this.val = 0.55 + this.amp*(base*depth - 0.5) + tremor;
-      document.documentElement.style.setProperty('--halo-alpha', (0.18 + 0.28*this.val).toFixed(3));
-      document.documentElement.style.setProperty('--halo-blur',  (0.60 + 0.80*this.val).toFixed(3));
-      document.documentElement.style.setProperty('--glow-mult',  (0.60 + 0.90*this.val).toFixed(3));
-      document.documentElement.style.setProperty('--sweep-speed', this.sweep.toFixed(3));
-    }
-  }
-  const breath = new BreathEngine();
-  (function loopBreath(){ breath.tick(); requestAnimationFrame(loopBreath); })();
-
-  
-  class RiskWheel {
-    constructor(canvas, opts={}){
-      this.c = canvas; this.ctx = canvas.getContext('2d');
-      this.pixelRatio = Math.max(1, Math.min(2, devicePixelRatio||1));
-      this.value = 0.0; this.target=0.0; this.vel=0.0;
-      this.spring = prefersReduced ? 1.0 : 0.12;
-      this.secondary = !!opts.secondary;
-      this._lastDraw = 0;
-      this._lastAccent = null;
-      this._static = null; // offscreen cache
-      this._resize = this._resize.bind(this);
-      this._tick = this._tick.bind(this);
-      this._paused = false;
-
-      const ro = new ResizeObserver(this._resize);
-      ro.observe(this.c);
-      const panel = document.getElementById(this.secondary ? 'wheelPanel2' : 'wheelPanel');
-      if (panel) ro.observe(panel);
-
-      document.addEventListener('visibilitychange', ()=>{
-        this._paused = document.hidden;
-      });
-
-      this._resize();
-      requestAnimationFrame(this._tick);
-    }
-    setTarget(x){ this.target = clamp01(x); }
-
-    _resize(){
-      const panel = document.getElementById(this.secondary ? 'wheelPanel2' : 'wheelPanel');
-      const rect = (panel||this.c).getBoundingClientRect();
-      let w = rect.width||0, h = rect.height||0;
-      if (h < 2) h = w;
-      const s = Math.max(1, Math.min(w, h));
-      const px = this.pixelRatio;
-      this.c.width = Math.round(s * px);
-      this.c.height = Math.round(s * px);
-      this._buildStatic();
-      this._draw(true);
-    }
-
-    _buildStatic(){
-      const W=this.c.width, H=this.c.height;
-      if(!W||!H) return;
-      // Offscreen canvas cache for background ring
-      const off = document.createElement('canvas');
-      off.width=W; off.height=H;
-      const ctx=off.getContext('2d');
-      const cx=W/2, cy=H/2, R=Math.min(W,H)*0.46, inner=R*0.62;
-      ctx.clearRect(0,0,W,H);
-      ctx.save(); ctx.translate(cx,cy); ctx.rotate(-Math.PI/2);
-      ctx.lineWidth = (R-inner);
-      ctx.lineCap = 'round';
-      ctx.strokeStyle='#ffffff16';
-      ctx.beginPath(); ctx.arc(0,0,(R+inner)/2, 0, Math.PI*2); ctx.stroke();
-      ctx.restore();
-      this._static = off;
-    }
-
-    _tick(ts){
-      if (this._paused){ requestAnimationFrame(this._tick); return; }
-
-      const d = this.target - this.value;
-      this.vel = this.vel * 0.82 + d * this.spring;
-      this.value += this.vel;
-
-      // throttle draw to ~30fps unless forced
-      if (!this._lastDraw || (ts - this._lastDraw) > 33 || Math.abs(d) > 0.002){
-        this._draw(false);
-        this._lastDraw = ts;
-      }
-      requestAnimationFrame(this._tick);
-    }
-
-    _colorStops(accent){
-      const green="#43d17a", amber="#f6c454", red="#ff6a6a";
-      // lightly mix base with accent
-      const mix=(h1,h2,k)=>{
-        const a=parseInt(h1.slice(1),16), b=parseInt(h2.slice(1),16);
-        const r=(a>>16)&255, g=(a>>8)&255, bl=a&255;
-        const r2=(b>>16)&255, g2=(b>>8)&255, bl2=b&255;
-        const m=(x,y)=>Math.round(x+(y-x)*k);
-        return `#${m(r,r2).toString(16).padStart(2,'0')}${m(g,g2).toString(16).padStart(2,'0')}${m(bl,bl2).toString(16).padStart(2,'0')}`;
-      };
-      const g = mix(green, accent, 0.18);
-      const a = mix(amber, accent, 0.18);
-      const r = mix(red,   accent, 0.18);
-      return {g,a,r};
-    }
-
-    _draw(force){
-      const ctx=this.ctx, W=this.c.width, H=this.c.height;
-      if (!W || !H) return;
-      const cx=W/2, cy=H/2, R=Math.min(W,H)*0.46, inner=R*0.62;
-
-      // cache accent reads (avoids repeated getComputedStyle)
-      const accent = (document.documentElement.style.getPropertyValue('--accent') || getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#49c2ff').trim() || '#49c2ff';
-      if (force || accent !== this._lastAccent){
-        this._lastAccent = accent;
-        this._stops = this._colorStops(accent);
-      }
-
-      ctx.setTransform(1,0,0,1,0,0);
-      ctx.clearRect(0,0,W,H);
-
-      if (this._static) ctx.drawImage(this._static, 0, 0);
-
-      const p=clamp01(this.value);
-      if (p > 0.001){
-        ctx.save(); ctx.translate(cx,cy); ctx.rotate(-Math.PI/2);
-        ctx.lineWidth = (R-inner);
-        ctx.lineCap = 'round';
-
-        const mid = (R+inner)/2;
-        // Use fast conic gradient if supported
-        if (ctx.createConicGradient){
-          const grad = ctx.createConicGradient(0, 0, 0);
-          grad.addColorStop(0.00, this._stops.g);
-          grad.addColorStop(0.40, this._stops.a);
-          grad.addColorStop(1.00, this._stops.r);
-          ctx.strokeStyle = grad;
-          ctx.beginPath();
-          ctx.arc(0,0,mid, 0, p*Math.PI*2);
-          ctx.stroke();
-        } else {
-          // Fallback: fewer segments, pre-mixed stops
-          const segs=64;
-          const maxAng=p*Math.PI*2;
-          for(let i=0;i<segs;i++){
-            const t0=i/segs; if(t0>=p) break;
-            const a0=t0*maxAng, a1=((i+1)/segs)*maxAng;
-            const c = t0<.4 ? this._stops.g : (t0<.7 ? this._stops.a : this._stops.r);
-            ctx.strokeStyle=c;
-            ctx.beginPath(); ctx.arc(0,0,mid, a0, a1); ctx.stroke();
-          }
-        }
-
-        // sweep dot (cheap)
-        const sp = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sweep-speed')) || (prefersReduced? .04 : .12);
-        const t = performance.now()/1000;
-        const sweepAng = (t * sp) % (Math.PI*2);
-        ctx.save(); ctx.rotate(sweepAng);
-        const dotR = Math.max(4*this.pixelRatio, (R-inner)*0.22);
-        const grad2 = ctx.createRadialGradient(mid,0, 2, mid,0, dotR);
-        grad2.addColorStop(0, 'rgba(255,255,255,.95)');
-        grad2.addColorStop(1, 'rgba(255,255,255,0)');
-        ctx.fillStyle = grad2;
-        ctx.beginPath(); ctx.arc(mid,0, dotR, 0, Math.PI*2); ctx.fill();
-        ctx.restore();
-
-        ctx.restore();
-      }
-    }
-  }
-
-const wheel = new RiskWheel(document.getElementById('wheelCanvas'));
-  const wheel2El = document.getElementById('wheelCanvas2');
-  const wheel2 = wheel2El ? new RiskWheel(wheel2El, {secondary:true}) : null;
-  const hudNumber=$('#hudNumber'), hudLabel=$('#hudLabel'), hudNote=$('#hudNote');
-  const hudNumber2=$('#hudNumber2'), hudLabel2=$('#hudLabel2'), hudNote2=$('#hudNote2');
-  const reasonsList=$('#reasonsList'), confidencePill=$('#confidencePill'), debugBox=$('#debugBox');
-  const btnRefresh=$('#btnRefresh'), btnAuto=$('#btnAuto'), btnDebug=$('#btnDebug');
-
-  function setHUD(j, els){
-    els = els || {num:hudNumber, label:hudLabel, note:hudNote};
-    const pct = Math.round(clamp01(j.harm_ratio||0)*100);
-    if(els.num) els.num.textContent = pct + "%";
-    if(els.label) els.label.textContent = (j.label||"").toUpperCase() || (pct<40?"CLEAR":pct<75?"CHANGING":"ELEVATED");
-    if(els.note) els.note.textContent  = j.blurb || (pct<40?"Clear conditions detected":"Stay adaptive and scan");
-    if (j.color){ document.documentElement.style.setProperty('--accent', j.color); }
-    if(confidencePill) confidencePill.textContent = "Conf: " + (j.confidence!=null ? Math.round(clamp01(j.confidence)*100) : "--") + "%";
-    if(reasonsList) reasonsList.innerHTML="";
-    (Array.isArray(j.reasons)? j.reasons.slice(0,8):["Model is composing context..."]).forEach(x=>{
-      const li=document.createElement('li'); li.textContent=x; if(reasonsList) reasonsList.appendChild(li);
-    });
-    if (btnDebug.getAttribute('aria-pressed')==='true'){
-      if(debugBox) debugBox.textContent = JSON.stringify(j, null, 2);
-    }
-  }
-
-  function applyReading(j){
-    if(!j) return;
-    // Dual payload: {grok, chatgpt, consensus}
-    if (j && (j.grok || j.chatgpt || j.consensus)){
-      const primary = j.consensus || j.chatgpt || j.grok;
-      if(primary){
-        current.last=primary; current.harm = clamp01(primary.harm_ratio);
-        wheel.setTarget(current.harm);
-        breath.setFromRisk(current.harm, {confidence: primary.confidence});
-        setHUD(primary);
-      }
-      if (wheel2){
-        const secondary = (j.chatgpt && primary!==j.chatgpt) ? j.chatgpt : j.grok;
-        const use = secondary || j.chatgpt || j.grok;
-        if(use){
-          wheel2.setTarget(clamp01(use.harm_ratio||0));
-          setHUD(use, {num:hudNumber2, label:hudLabel2, note:hudNote2});
-        } else {
-          setHUD({harm_ratio:0,label:'UNAVAILABLE',blurb:'Provider unavailable',confidence:0}, {num:hudNumber2, label:hudLabel2, note:hudNote2});
-        }
-      }
-      return;
-    }
-    if(!j || typeof j.harm_ratio!=='number') return;
-    const now = Date.now();
-    if (lastApplyAt && (now - lastApplyAt) < MIN_UPDATE_MS) return;
-    lastApplyAt = now;
-    current.last=j; current.harm = clamp01(j.harm_ratio);
-    wheel.setTarget(current.harm);
-    breath.setFromRisk(current.harm, {confidence: j.confidence});
-    setHUD(j);
-  }
-
-  async function fetchJson(url){
-    try{ const r=await fetch(url, {credentials:'same-origin'}); return await r.json(); }
-    catch(e){ return null; }
-  }
-  async function fetchGuessOnce(){
-    const url = {{ '"/api/risk/llm_guess?dual=1"' if dual_readings_ui else '"/api/risk/llm_guess"' }};
-    const j = await fetchJson(url);
-    applyReading(j);
-  }
-
-  btnRefresh.onclick = ()=>fetchGuessOnce();
-
-  btnDebug.onclick = ()=>{
-    const cur=btnDebug.getAttribute('aria-pressed')==='true';
-    btnDebug.setAttribute('aria-pressed', !cur);
-    btnDebug.textContent = "Debug: " + (!cur ? "On" : "Off");
-    debugBox.style.display = !cur ? '' : 'none';
-    if(!cur && current.last) debugBox.textContent = JSON.stringify(current.last,null,2);
-  };
-
-  let autoTimer=null;
-  function startAuto(){
-    stopAuto();
-    btnAuto.setAttribute('aria-pressed','true');
-    btnAuto.textContent="Auto: On";
-    fetchGuessOnce();
-    autoTimer=setInterval(fetchGuessOnce, 60*1000);
-  }
-  function stopAuto(){
-    if(autoTimer) clearInterval(autoTimer);
-    autoTimer=null;
-    btnAuto.setAttribute('aria-pressed','false');
-    btnAuto.textContent="Auto: Off";
-  }
-  btnAuto.onclick = ()=>{ if(autoTimer){ stopAuto(); } else { startAuto(); } };
-
-  (function initLottery(){
-    const btn = document.getElementById('lotteryBtn');
-    if(!btn) return;
-    const result = document.getElementById('lotteryResult');
-    const codeWrap = document.getElementById('lotteryCode');
-    const codeValue = document.getElementById('lotteryCodeValue');
-    const copyBtn = document.getElementById('lotteryCopy');
-    const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
-    if(copyBtn){
-      copyBtn.addEventListener('click', ()=>{
-        const text = codeValue?.textContent || "";
-        if(text){ navigator.clipboard?.writeText(text); }
-        copyBtn.textContent = "Copied";
-        setTimeout(()=>{ copyBtn.textContent = "Copy"; }, 1400);
-      });
-    }
-    btn.addEventListener('click', async ()=>{
-      btn.disabled = true;
-      btn.textContent = "Scanning...";
-      try{
-        const res = await fetch('/api/invite_lottery', {
-          method:'POST',
-          headers:{ 'Content-Type':'application/json', 'X-CSRFToken': token || "" },
-          body: JSON.stringify({})
-        });
-        const data = await res.json();
-        if(result) result.textContent = data.message || "Signal returned no response.";
-        if(data.invite_code){
-          codeWrap.style.display = 'flex';
-          codeValue.textContent = data.invite_code;
-        } else {
-          codeWrap.style.display = 'none';
-          codeValue.textContent = "";
-        }
-      }catch(e){
-        if(result) result.textContent = "Signal lost. Try again soon.";
-      }finally{
-        btn.disabled = false;
-        btn.textContent = "Draw Invite Signal";
-      }
-    });
-  })();
-
-  (function trySSE(){
-    if(!('EventSource' in window)) return;
-    try{
-      const es = new EventSource('/api/risk/stream');
-      es.onmessage = ev=>{ try{ const j=JSON.parse(ev.data); applyReading(j); }catch(_){} };
-      es.onerror = ()=>{ es.close(); };
-    }catch(e){}
-  })();
-
-  startAuto();
-  </script>
-</body>
-</html>
-    """, seed_hex=seed_hex, seed_code=seed_code, posts=posts, dual_readings_ui=dual_readings_ui, use_grok_ui=use_grok_ui, use_chatgpt_ui=use_chatgpt_ui, csrf_token=csrf_token)
+    return redirect(url_for('x_dashboard'))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -8611,9 +7758,9 @@ def login():
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 
     
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/orbitron.css') }}" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-          integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/typeface-orbitron/1.1.13/index.min.css" integrity="sha384-Wk0o7Q4V2rHh0sR7T5pQKZ8xU3Y6JXb5w2aG3Jr0r8GkP6gI7lqV9GqV2o2r3ZxA" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+          integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
 
     <style>
         body {
@@ -8806,14 +7953,14 @@ def register():
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
     <meta name="csrf-token" content="{{ csrf_token() }}">
 
-    <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
-          integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-    <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
-          integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-          integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
-          integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-roboto/1.1.13/index.min.css" rel="stylesheet"
+          integrity="sha384-2V4P1oTyWcCwZqZ9LP8y8QL4mFQZVfrSez2yYcXgD1hlXQW2K9eK7oV5L9c3NPGp" crossorigin="anonymous">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-orbitron/1.1.13/index.min.css" rel="stylesheet"
+          integrity="sha384-Wk0o7Q4V2rHh0sR7T5pQKZ8xU3Y6JXb5w2aG3Jr0r8GkP6gI7lqV9GqV2o2r3ZxA" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+          integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.15.4/css/all.css"
+          integrity="sha384-dyZ88mC6Up2uqS4h/KRgHuoeGwBcD4Ng9SiP4dIRy0EXT9KPU5t5Q0eP5B8vgc7X" crossorigin="anonymous">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
 
@@ -9239,14 +8386,14 @@ def settings():
     <meta charset="UTF-8">
     <title>Settings - QRS</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet"
-          integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-    <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
-          integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-    <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
-          integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
-          integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"
+          integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-roboto/1.1.13/index.min.css" rel="stylesheet"
+          integrity="sha384-2V4P1oTyWcCwZqZ9LP8y8QL4mFQZVfrSez2yYcXgD1hlXQW2K9eK7oV5L9c3NPGp" crossorigin="anonymous">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-orbitron/1.1.13/index.min.css" rel="stylesheet"
+          integrity="sha384-Wk0o7Q4V2rHh0sR7T5pQKZ8xU3Y6JXb5w2aG3Jr0r8GkP6gI7lqV9GqV2o2r3ZxA" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.15.4/css/all.css"
+          integrity="sha384-dyZ88mC6Up2uqS4h/KRgHuoeGwBcD4Ng9SiP4dIRy0EXT9KPU5t5Q0eP5B8vgc7X" crossorigin="anonymous">
     <style>
         body { background:#121212; color:#fff; font-family:'Roboto',sans-serif; }
         .sidebar { position:fixed; top:0; left:0; height:100%; width:220px; background:#1f1f1f; padding-top:60px; border-right:1px solid #333; transition:width .3s; }
@@ -9369,11 +8516,8 @@ def settings():
         </ul>
     </div>
 
-    <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
-            integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
-    <script src="{{ url_for('static', filename='js/popper.min.js') }}" integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
-    <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
-            integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+            integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
 
@@ -9884,994 +9028,7 @@ def view_report(report_id):
 
 @app.route('/dashboard', methods=['GET', 'POST'])
 def dashboard():
-    if 'username' not in session:
-        return redirect(url_for('login'))
-    username = session['username']
-    user_id = get_user_id(username)
-    if user_id is None:
-        session.clear()
-        return redirect(url_for('login'))
-    try:
-        reports = get_hazard_reports(user_id)
-    except sqlite3.Error:
-        logger.exception("Failed to load hazard reports for dashboard")
-        reports = []
-    csrf_token = generate_csrf()
-    try:
-        preferred_model = get_user_preferred_model(user_id)
-    except sqlite3.Error:
-        logger.exception("Failed to load preferred model for dashboard")
-        preferred_model = "openai"
-
-    # --- X Social Safety module status (per-user vault) ---
-    try:
-        x_user_id = vault_get(user_id, "x2_user_id", "")
-        x_has_bearer = bool(vault_get(user_id, "x2_bearer_token", ""))
-        x_configured = bool(x_user_id and x_has_bearer)
-    except Exception:
-        x_user_id = ""
-        x_configured = False
-
-    x_dashboard_url = url_for("x_dashboard") if "x_dashboard" in app.view_functions else None
-    admin_blog_backup_url = url_for("admin_blog_backup_page") if "admin_blog_backup_page" in app.view_functions else None
-    admin_local_llm_url = _safe_url_for("admin_local_llm_page") if "admin_local_llm_page" in app.view_functions else None
-    local_llm_url = _safe_url_for("local_llm") if "local_llm" in app.view_functions else None
-
-    return render_template_string("""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Dashboard - Quantum Road Scanner</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-
-    <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
-          integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-    <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
-          integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-          integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
-          integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
-
-    <style>
-        body {
-            background-color: #121212;
-            color: #ffffff;
-            font-family: 'Roboto', sans-serif;
-        }
-        .sidebar {
-            position: fixed;
-            top: 0;
-            left: 0;
-            height: 100%;
-            width: 220px;
-            background-color: #1f1f1f;
-            padding-top: 60px;
-            border-right: 1px solid #333;
-            transition: width 0.3s;
-        }
-        .sidebar a {
-            color: #bbbbbb;
-            padding: 15px 20px;
-            text-decoration: none;
-            display: block;
-            font-size: 1rem;
-            transition: background-color 0.3s, color 0.3s;
-        }
-        .sidebar a:hover, .sidebar a.active {
-            background-color: #333;
-            color: #ffffff;
-        }
-        .content {
-            margin-left: 220px;
-            padding: 20px;
-            transition: margin-left 0.3s;
-        }
-        .navbar-brand {
-            font-size: 1.5rem;
-            color: #ffffff;
-            text-align: center;
-            display: block;
-            margin-bottom: 20px;
-            font-family: 'Orbitron', sans-serif;
-        }
-        .stepper {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 30px;
-        }
-        .step {
-            text-align: center;
-            flex: 1;
-            position: relative;
-        }
-        .step::before {
-            content: '';
-            position: absolute;
-            top: 15px;
-            right: -50%;
-            width: 100%;
-            height: 2px;
-            background-color: #444;
-            z-index: -1;
-        }
-        .step:last-child::before {
-            display: none;
-        }
-        .step .circle {
-            width: 30px;
-            height: 30px;
-            border-radius: 50%;
-            background-color: #444;
-            margin: 0 auto 10px;
-            line-height: 30px;
-            color: #fff;
-            font-weight: bold;
-        }
-        .step.active .circle, .step.completed .circle {
-            background-color: #00adb5;
-        }
-        .form-section {
-            display: none;
-        }
-        .form-section.active {
-            display: block;
-        }
-        .table thead th {
-            background-color: #1f1f1f;
-            color: #00adb5;
-        }
-        .table tbody td {
-            color: #ffffff;
-            background-color: #2c2c2c;
-        }
-        .modal-header {
-            background-color: #1f1f1f;
-            color: #00adb5;
-        }
-        .modal-body {
-            background-color: #121212;
-            color: #ffffff;
-        }
-        .btn-custom {
-            background: #00adb5;
-            border: none;
-            color: #ffffff;
-            padding: 10px 20px;
-            border-radius: 5px;
-            transition: background 0.3s;
-        }
-        .btn-custom:hover {
-            background: #019a9e;
-        }
-        .btn-quantum {
-            background: linear-gradient(135deg, #6d5cff, #00e5ff);
-            color: #0b0b14;
-            font-weight: 800;
-            border: none;
-            box-shadow: 0 12px 30px rgba(77, 123, 255, 0.35);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-        .btn-quantum:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 16px 40px rgba(0, 229, 255, 0.35);
-            color: #0b0b14;
-        }
-        .btn-quantum-outline {
-            background: transparent;
-            border: 1px solid rgba(0, 229, 255, 0.55);
-            color: #c7f6ff;
-            font-weight: 700;
-        }
-        @media (max-width: 767px) {
-            .sidebar { width: 60px; }
-            .sidebar a { padding: 15px 10px; text-align: center; }
-            .sidebar a span { display: none; }
-            .content { margin-left: 60px; }
-            .stepper {
-                flex-direction: column;
-            }
-            .step::before {
-                display: none;
-            }
-        }
-    
-        /* Quick apps bar */
-        .quick-apps{
-            display:flex; align-items:center; justify-content:space-between;
-            gap:14px; flex-wrap:wrap;
-            padding:12px 14px;
-            margin: 0 0 14px 0;
-            border-radius: 16px;
-            background: linear-gradient(135deg, rgba(88,112,255,0.10), rgba(255,255,255,0.06));
-            border: 1px solid rgba(255,255,255,0.10);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.18);
-        }
-        .quick-left, .quick-right{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-        .chip{
-            display:inline-flex; align-items:center; gap:10px;
-            padding:10px 12px;
-            border-radius: 999px;
-            background: rgba(255,255,255,0.10);
-            border: 1px solid rgba(255,255,255,0.10);
-            color: rgba(255,255,255,0.94);
-            text-decoration:none;
-            transition: transform .15s ease, background .15s ease, border-color .15s ease;
-            font-weight:700;
-        }
-        .chip:hover{ transform: translateY(-1px); background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.18); }
-        .chip.ghost{ background: rgba(255,255,255,0.06); }
-        .chip-status{
-            display:inline-flex; align-items:center;
-            padding:8px 12px;
-            border-radius: 999px;
-            font-weight:800;
-            letter-spacing: .02em;
-            border:1px solid rgba(255,255,255,0.10);
-            background: rgba(255,255,255,0.08);
-        }
-        .chip-status.ok{ background: rgba(46, 204, 113, 0.14); border-color: rgba(46,204,113,0.24); }
-        .chip-status.warn{ background: rgba(241, 196, 15, 0.14); border-color: rgba(241,196,15,0.24); }
-        .tab-section{ display:none; }
-        .tab-section.active{ display:block; }
-        .weather-grid{
-            display:grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap:16px;
-        }
-        .weather-card{
-            background: rgba(255,255,255,0.06);
-            border:1px solid rgba(255,255,255,0.12);
-            border-radius:16px;
-            padding:16px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-        }
-        .weather-card h5{ margin-bottom:12px; color:#9fe7ff; }
-        .weather-chip{
-            display:inline-flex; align-items:center; gap:8px;
-            padding:8px 12px; border-radius:999px;
-            background: rgba(255,255,255,0.08);
-            border:1px solid rgba(255,255,255,0.12);
-            font-weight:700;
-        }
-        #weatherMap{ height: 280px; border-radius: 14px; overflow: hidden; }
-        .forecast-buttons{ display:flex; flex-wrap:wrap; gap:10px; }
-        .forecast-buttons .btn{ border-radius: 999px; }
-        .radar-meta{ font-size: 0.9rem; color: #b6d6ff; }
-        .quantum-panel{
-            background: linear-gradient(145deg, rgba(33, 36, 86, 0.85), rgba(10, 11, 30, 0.95));
-            border: 1px solid rgba(109, 92, 255, 0.35);
-        }
-        .radar-idea{
-            border-left: 3px solid rgba(0, 229, 255, 0.6);
-            padding-left: 12px;
-            margin-bottom: 12px;
-        }
-        .radar-idea h6{ color: #9ff3ff; margin-bottom: 6px; }
-</style>
-</head>
-<body>
-
-    <div class="sidebar">
-        <div class="navbar-brand">QRS</div>
-        <a href="#" class="nav-link active" data-tab="scanTab" onclick="showTab('scanTab')">
-            <i class="fas fa-home"></i> <span>Dashboard</span>
-        </a>
-        <a href="#" class="nav-link" data-tab="weatherTab" onclick="showTab('weatherTab')">
-            <i class="fas fa-cloud-sun-rain"></i> <span>Weather</span>
-        </a>
-        {% if session.is_admin %}
-        <a href="{{ url_for('settings') }}">
-            <i class="fas fa-cogs"></i> <span>Settings</span>
-        </a>
-        {% if x_dashboard_url %}
-        <a href="{{ x_dashboard_url }}">
-            <i class="fa-brands fa-x-twitter"></i> <span>X Social Safety</span>
-        </a>
-        {% endif %}
-        {% if admin_blog_backup_url %}
-        <a href="{{ admin_blog_backup_url }}">
-            <i class="fas fa-database"></i> <span>Blog Backup</span>
-        </a>
-        {% endif %}
-        {% if admin_local_llm_url %}
-        <a href="{{ admin_local_llm_url }}">
-            <i class="fas fa-microchip"></i> <span>Local Llama</span>
-        </a>
-        {% endif %}
-        {% endif %}
-        <a href="{{ url_for('logout') }}">
-            <i class="fas fa-sign-out-alt"></i> <span>Logout</span>
-        </a>
-    </div>
-
-    <div class="content">
-        <div id="scanTab" class="tab-section active">
-            <div class="quick-apps">
-                <div class="quick-left">
-                    {% if x_dashboard_url %}
-                    <a class="chip" href="{{ x_dashboard_url }}">
-                        <i class="fa-brands fa-x-twitter"></i> X Social Safety
-                    </a>
-                    {% else %}
-                    <span class="chip">
-                        <i class="fa-brands fa-x-twitter"></i> X Social Safety
-                    </span>
-                    {% endif %}
-                    <span class="chip-status {{ 'ok' if x_configured else 'warn' }}">
-                        {{ 'configured' if x_configured else 'needs setup' }}
-                    </span>
-                    {% if not x_configured and x_dashboard_url %}
-                    <a class="chip ghost" href="{{ x_dashboard_url }}#settings">
-                        Configure
-                    </a>
-                    {% endif %}
-                </div>
-                <div class="quick-right">
-                    {% if admin_blog_backup_url %}
-                    <a class="chip ghost" href="{{ admin_blog_backup_url }}"><i class="fa-solid fa-box-archive"></i> Blog Backup</a>
-                    {% endif %}
-                    {% if local_llm_url %}
-                    <a class="chip ghost" href="{{ local_llm_url }}"><i class="fa-solid fa-robot"></i> Local LLM</a>
-                    {% endif %}
-                </div>
-            </div>
-
-        <div class="stepper">
-            <div class="step active" id="stepper1">
-                <div class="circle">1</div>
-                Grabs
-            </div>
-            <div class="step" id="stepper2">
-                <div class="circle">2</div>
-                Street Name
-            </div>
-            <div class="step" id="stepper3">
-                <div class="circle">3</div>
-                Run Scan
-            </div>
-        </div>
-
-        <div id="step1" class="form-section active">
-            <form id="grabCoordinatesForm">
-                <div class="form-group">
-                    <label for="latitude">Latitude</label>
-                    <input type="text" class="form-control" id="latitude" name="latitude" placeholder="Enter latitude" required>
-                </div>
-                <div class="form-group">
-                    <label for="longitude">Longitude</label>
-                    <input type="text" class="form-control" id="longitude" name="longitude" placeholder="Enter longitude" required>
-                </div>
-                <button type="button" class="btn btn-custom" onclick="getCoordinates()">
-                    <i class="fas fa-location-arrow"></i> Get Current Location
-                </button>
-                <button type="button" class="btn btn-custom" onclick="nextStep(1)">
-                    <i class="fas fa-arrow-right"></i> Next
-                </button>
-            </form>
-            <div id="statusMessage1" class="mt-3"></div>
-        </div>
-
-        <div id="step2" class="form-section">
-            <h4>Street Name</h4>
-            <p id="streetName">Fetching street name...</p>
-            <button type="button" class="btn btn-custom" onclick="nextStep(2)">
-                <i class="fas fa-arrow-right"></i> Next
-            </button>
-        </div>
-
-        <div id="step3" class="form-section">
-            <form id="runScanForm">
-                <div class="form-group">
-                    <label for="vehicle_type">Vehicle Type</label>
-                    <select class="form-control" id="vehicle_type" name="vehicle_type">
-                        <option value="motorbike">Motorbike</option>
-                        <option value="car">Car</option>
-                        <option value="truck">Truck</option>
-
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="destination">Destination</label>
-                    <input type="text" class="form-control" id="destination" name="destination" placeholder="Enter destination" required>
-                </div>
-                <div class="form-group">
-                    <label for="model_selection">Select Model</label>
-                    <select class="form-control" id="model_selection" name="model_selection">
-
-                        <option value="openai" {% if preferred_model == 'openai' %}selected{% endif %}>OpenAI (GPT-5.2)</option>
-{% if grok_ready %}
-<option value="grok" {% if preferred_model == 'grok' %}selected{% endif %}>Grok</option>
-{% endif %}
-{% if llama_ready %}
-<option value="llama_local" {% if preferred_model == 'llama_local' %}selected{% endif %}>Local Llama (llama_cpp)</option>
-{% endif %}
-
-                    </select>
-                </div>
-                <button type="button" class="btn btn-custom" onclick="startScan()">
-                    <i class="fas fa-play"></i> Start Scan
-                </button>
-            </form>
-            <div id="statusMessage3" class="mt-3"></div>
-        </div>
-
-        <div id="reportsSection" class="mt-5">
-            <h3>Your Reports</h3>
-            {% if reports %}
-            <table class="table table-dark table-hover">
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for report in reports %}
-                    <tr>
-                        <td>{{ report['timestamp'] }}</td>
-                        <td>
-                            <button class="btn btn-info btn-sm" onclick="viewReport({{ report['id'] }})">
-                                <i class="fas fa-eye"></i> View
-                            </button>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% else %}
-            <p>No reports available.</p>
-            {% endif %}
-        </div>
-        </div>
-
-        <div id="weatherTab" class="tab-section">
-            <div class="weather-grid">
-                <div class="weather-card">
-                    <h5>Location + Radar</h5>
-                    <div class="form-group">
-                        <label for="weather_latitude">Latitude</label>
-                        <input type="text" class="form-control" id="weather_latitude" placeholder="Latitude">
-                    </div>
-                    <div class="form-group">
-                        <label for="weather_longitude">Longitude</label>
-                        <input type="text" class="form-control" id="weather_longitude" placeholder="Longitude">
-                    </div>
-                    <div class="d-flex flex-wrap gap-2 mb-3">
-                        <button type="button" class="btn btn-quantum" onclick="useWeatherLocation()">
-                            <i class="fas fa-location-arrow"></i> Use Current Location
-                        </button>
-                        <button type="button" class="btn btn-quantum-outline" onclick="syncFromScan()">
-                            <i class="fas fa-route"></i> Use Scan Coordinates
-                        </button>
-                    </div>
-                    <div id="weatherMap"></div>
-                    <p class="radar-meta mt-2">
-                        Radar overlay powered by RainViewer. Map tiles load once a location is set.
-                    </p>
-                </div>
-
-                <div class="weather-card">
-                    <h5>Forecast Modes</h5>
-                    <div class="forecast-buttons mb-3">
-                        <button class="btn btn-quantum" onclick="fetchWeather('1day')">1 Day</button>
-                        <button class="btn btn-quantum" onclick="fetchWeather('10day')">10 Day</button>
-                        <button class="btn btn-quantum" onclick="fetchWeather('hourly')">Hourly</button>
-                        <button class="btn btn-quantum" onclick="fetchWeather('80day')">80 Day Quantum</button>
-                    </div>
-                    <div id="weatherSummary" class="mb-3">
-                        <div class="weather-chip">Awaiting forecast...</div>
-                    </div>
-                    <div id="weatherEntanglement" class="mb-3"></div>
-                    <button class="btn btn-quantum-outline" onclick="fetchWeatherReport()">
-                        <i class="fas fa-brain"></i> Build LLM Weather Report
-                    </button>
-                </div>
-
-                <div class="weather-card quantum-panel">
-                    <h5>Quantum Radar Lab</h5>
-                    <div class="form-group">
-                        <label for="radarFocus">Radar Focus</label>
-                        <textarea class="form-control" id="radarFocus" rows="3" placeholder="e.g., storm shear near destination, fog risk, microburst watch"></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label for="radarMode">Radar Mode</label>
-                        <select class="form-control" id="radarMode">
-                            <option value="route">Route Stability</option>
-                            <option value="storm">Storm Dynamics</option>
-                            <option value="visibility">Visibility + Fog</option>
-                            <option value="energy">Energy Gradient</option>
-                        </select>
-                    </div>
-                    <button class="btn btn-quantum" onclick="fetchQuantumRadar()">
-                        <i class="fas fa-satellite-dish"></i> Generate Quantum Radar Brief
-                    </button>
-                    <div id="quantumRadarOutput" class="mt-3">
-                        <p class="text-muted">Quantum radar ideas and briefing will appear here.</p>
-                    </div>
-                </div>
-
-                <div class="weather-card">
-                    <h5>Quantum Weather Report</h5>
-                    <div id="weatherReport">
-                        <p class="text-muted">Generate a report to see route-focused forecasting and hazard windows.</p>
-                    </div>
-                </div>
-
-                <div class="weather-card">
-                    <h5>Road + Route Intelligence</h5>
-                    <p>Keep road scanning active while weather evolves. The weather engine syncs with your scan inputs to
-                       augment hazard detection, visibility risk, and arrival window planning.</p>
-                    <ul>
-                        <li>Color entanglement bits tie forecast certainty to your scan session.</li>
-                        <li>Hourly precipitation + wind shifts are mapped to road hazard windows.</li>
-                        <li>Long-range (80-day) outlooks are labeled as quantum extrapolations.</li>
-                    </ul>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="modal fade" id="reportModal" tabindex="-1" aria-labelledby="reportModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-          <div class="modal-header">
-            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-              <span aria-hidden="true">&times;</span>
-            </button>
-          </div>
-          <div class="modal-body" id="reportContent">
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="loading-spinner" style="display: none; position: fixed; top: 50%; left: 50%; z-index: 9999; width: 3rem; height: 3rem;">
-        <div class="spinner-border text-primary" role="status">
-            <span class="sr-only">Scanning...</span>
-        </div>
-    </div>
-
-    <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
-            integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
-    <script src="{{ url_for('static', filename='js/popper.min.js') }}"
-            integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
-    <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
-            integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
-
-    <script>
-        var csrf_token = {{ csrf_token | tojson }};
-
-        $.ajaxSetup({
-            beforeSend: function(xhr, settings) {
-                if (!/^GET|HEAD|OPTIONS|TRACE$/i.test(settings.type) && !this.crossDomain) {
-                    xhr.setRequestHeader("X-CSRFToken", csrf_token);
-                }
-            }
-        });
-
-        var currentStep = 1;
-
-        function showTab(tabId) {
-            $('.tab-section').removeClass('active');
-            $('#' + tabId).addClass('active');
-            $('.sidebar .nav-link').removeClass('active');
-            $('.sidebar .nav-link[data-tab="' + tabId + '"]').addClass('active');
-            if (tabId === 'weatherTab') {
-                initWeatherMap();
-            }
-        }
-
-        function showSection(step) {
-            $('.form-section').removeClass('active');
-            $('#' + step).addClass('active');
-            updateStepper(step);
-        }
-
-        function updateStepper(step) {
-            $('.step').removeClass('active completed');
-            for(var i=1; i<=step; i++) {
-                $('#stepper' + i).addClass('completed');
-            }
-            $('#stepper' + step).addClass('active');
-        }
-
-        function getCoordinates() {
-            if (!navigator.geolocation) {
-                alert("Geolocation is not supported by this browser.");
-                return;
-            }
-            const opts = { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 };
-            navigator.geolocation.getCurrentPosition(function(position) {
-                $('#latitude').val(position.coords.latitude);
-                $('#longitude').val(position.coords.longitude);
-                syncWeatherInputs(position.coords.latitude, position.coords.longitude);
-            }, function(error) {
-                const message = error && error.message ? error.message : "Location permission denied.";
-                alert("Error obtaining location: " + message);
-            }, opts);
-        }
-
-        function syncWeatherInputs(lat, lon) {
-            if (lat && lon) {
-                $('#weather_latitude').val(lat);
-                $('#weather_longitude').val(lon);
-                updateWeatherMap(lat, lon);
-            }
-        }
-
-        function useWeatherLocation() {
-            if (!navigator.geolocation) {
-                alert("Geolocation is not supported by this browser.");
-                return;
-            }
-            const opts = { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 };
-            navigator.geolocation.getCurrentPosition(function(position) {
-                const lat = position.coords.latitude;
-                const lon = position.coords.longitude;
-                syncWeatherInputs(lat, lon);
-            }, function(error) {
-                const message = error && error.message ? error.message : "Location permission denied.";
-                alert("Error obtaining location: " + message);
-            }, opts);
-        }
-
-        function syncFromScan() {
-            const lat = $('#latitude').val();
-            const lon = $('#longitude').val();
-            if (!lat || !lon) {
-                alert("Scan coordinates are empty.");
-                return;
-            }
-            syncWeatherInputs(lat, lon);
-        }
-
-        async function fetchStreetName(lat, lon) {
-            try {
-                const response = await fetch(`/reverse_geocode?lat=${lat}&lon=${lon}`);
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || 'Geocoding failed');
-                }
-                const data = await response.json();
-                return data.street_name || "Unknown Location";
-            } catch (error) {
-                console.error(error);
-                return "Geocoding Error";
-            }
-        }
-
-        async function nextStep(step) {
-            if(step === 1) {
-                const lat = $('#latitude').val();
-                const lon = $('#longitude').val();
-                if(!lat || !lon) {
-                    alert("Please enter both latitude and longitude.");
-                    return;
-                }
-                $('#streetName').text("Fetching street name...");
-                const streetName = await fetchStreetName(lat, lon);
-                $('#streetName').text(streetName);
-                syncWeatherInputs(lat, lon);
-                showSection('step2');
-            } else if(step === 2) {
-                showSection('step3');
-            }
-        }
-
-        async function startScan() {
-            const lat = $('#latitude').val();
-            const lon = $('#longitude').val();
-            const vehicle_type = $('#vehicle_type').val();
-            const destination = $('#destination').val();
-            const model_selection = $('#model_selection').val();
-
-            if(!vehicle_type || !destination) {
-                alert("Please select vehicle type and enter destination.");
-                return;
-            }
-
-            $('#statusMessage3').text("Scan started. Please wait...");
-            $('.loading-spinner').show();
-
-            const formData = {
-                latitude: lat,
-                longitude: lon,
-                vehicle_type: vehicle_type,
-                destination: destination,
-                model_selection: model_selection
-            };
-
-            try {
-                const response = await fetch('/start_scan', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': csrf_token
-                    },
-                    body: JSON.stringify(formData)
-                });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    $('.loading-spinner').hide();
-                    $('#statusMessage3').text("Error: " + (errorData.error || 'Unknown error occurred.'));
-                    return;
-                }
-
-                const data = await response.json();
-                $('.loading-spinner').hide();
-                $('#statusMessage3').text(data.message);
-
-                if (data.report_id) {
-
-                    viewReport(data.report_id);
-
-                }
-            } catch (error) {
-                $('.loading-spinner').hide();
-                $('#statusMessage3').text("An error occurred during the scan.");
-                console.error('Error:', error);
-            }
-        }
-
-        function viewReport(reportId) {
-            $.ajax({
-                url: '/view_report/' + reportId,
-                method: 'GET',
-                success: function(data) {
-                    $('#reportContent').html(data); 
-                    $('#reportModal').modal('show');
-                },
-                error: function(xhr, status, error) {
-                    alert("An error occurred while fetching the report.");
-                    console.error('Error:', error);
-                }
-            });
-        }
-
-        function prependReportToTable(reportId, timestamp) {
-            const newRow = `
-                <tr>
-                    <td>${timestamp}</td>
-                    <td>
-                        <button class="btn btn-info btn-sm" onclick="viewReport(${reportId})">
-                            <i class="fas fa-eye"></i> View
-                        </button>
-                    </td>
-                </tr>
-            `;
-            $('table tbody').prepend(newRow);
-        }
-
-        let weatherMap = null;
-        let weatherMarker = null;
-        let radarLayer = null;
-        let radarTimestamp = null;
-
-        function initWeatherMap() {
-            if (weatherMap) {
-                return;
-            }
-            weatherMap = L.map('weatherMap').setView([37.7749, -122.4194], 10);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                maxZoom: 19,
-                attribution: '&copy; OpenStreetMap contributors'
-            }).addTo(weatherMap);
-        }
-
-        function updateWeatherMap(lat, lon) {
-            initWeatherMap();
-            const coords = [parseFloat(lat), parseFloat(lon)];
-            if (!weatherMarker) {
-                weatherMarker = L.marker(coords).addTo(weatherMap);
-            } else {
-                weatherMarker.setLatLng(coords);
-            }
-            weatherMap.setView(coords, 11);
-            loadRadarLayer();
-        }
-
-        async function loadRadarLayer() {
-            if (!weatherMap) {
-                return;
-            }
-            try {
-                const resp = await fetch('https://api.rainviewer.com/public/weather-maps.json');
-                if (!resp.ok) {
-                    throw new Error('Radar feed unavailable');
-                }
-                const data = await resp.json();
-                const radarTimes = data?.radar?.past || [];
-                const latest = radarTimes.length ? radarTimes[radarTimes.length - 1].time : null;
-                if (!latest || latest === radarTimestamp) {
-                    return;
-                }
-                radarTimestamp = latest;
-                if (radarLayer) {
-                    weatherMap.removeLayer(radarLayer);
-                }
-                radarLayer = L.tileLayer(
-                    `https://tilecache.rainviewer.com/v2/radar/${latest}/256/{z}/{x}/{y}/2/1_1.png`,
-                    { opacity: 0.6 }
-                );
-                radarLayer.addTo(weatherMap);
-            } catch (error) {
-                console.warn('Radar overlay failed', error);
-            }
-        }
-
-        function getWeatherCoordinates() {
-            const lat = $('#weather_latitude').val() || $('#latitude').val();
-            const lon = $('#weather_longitude').val() || $('#longitude').val();
-            if (!lat || !lon) {
-                alert("Set latitude and longitude first.");
-                return null;
-            }
-            return { lat, lon };
-        }
-
-        async function fetchWeather(mode) {
-            const coords = getWeatherCoordinates();
-            if (!coords) { return; }
-            const payload = {
-                latitude: coords.lat,
-                longitude: coords.lon,
-                mode: mode
-            };
-            $('#weatherSummary').html('<div class="weather-chip">Fetching forecast...</div>');
-            try {
-                const response = await fetch('/api/weather_forecast', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf_token },
-                    body: JSON.stringify(payload)
-                });
-                if (!response.ok) {
-                    const err = await response.json();
-                    $('#weatherSummary').html(`<div class="weather-chip">Error: ${err.error || 'fetch failed'}</div>`);
-                    return;
-                }
-                const data = await response.json();
-                const summary = data.summary || {};
-                const ent = data.entanglement || {};
-                const entHex = ent.hex || '#00adb5';
-                const longRange = data.long_range ? `<div class="mt-2">${data.long_range.headline || ''}</div>` : '';
-                $('#weatherSummary').html(`
-                    <div class="weather-chip">Now: ${summary.current_temp_c ?? '--'}°C · ${summary.current_weather || 'Unknown'}</div>
-                    <div class="mt-2">Today: ${summary.today_low_c ?? '--'}°C → ${summary.today_high_c ?? '--'}°C · ${summary.today_weather || 'Unknown'}</div>
-                    <div class="mt-1">Wind: ${summary.wind_speed ?? '--'} m/s (gust ${summary.wind_gusts ?? '--'})</div>
-                    ${longRange}
-                `);
-                $('#weatherEntanglement').html(`
-                    <div class="weather-chip" style="border-color:${entHex}; color:${entHex};">
-                        <span class="badge" style="background:${entHex}; width:14px; height:14px; border-radius:50%; display:inline-block;"></span>
-                        Entanglement ${ent.qid25?.code || ''}
-                    </div>
-                `);
-                syncWeatherInputs(coords.lat, coords.lon);
-            } catch (error) {
-                console.error(error);
-                $('#weatherSummary').html('<div class="weather-chip">Weather fetch failed.</div>');
-            }
-        }
-
-        async function fetchWeatherReport() {
-            const coords = getWeatherCoordinates();
-            if (!coords) { return; }
-            const destination = $('#destination').val();
-            $('#weatherReport').html('<p>Building LLM report...</p>');
-            try {
-                const response = await fetch('/api/weather_report', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf_token },
-                    body: JSON.stringify({
-                        latitude: coords.lat,
-                        longitude: coords.lon,
-                        destination: destination,
-                        mode: '10day'
-                    })
-                });
-                if (!response.ok) {
-                    const err = await response.json();
-                    $('#weatherReport').html(`<p>Error: ${err.error || 'report failed'}</p>`);
-                    return;
-                }
-                const data = await response.json();
-                const report = data.report || {};
-                const entHex = data.entanglement?.hex || '#00adb5';
-                const windows = (report.hazard_windows || []).map(w => `<li>${w.start_day || ''}-${w.end_day || ''}: ${w.risk || ''} (${w.confidence || ''})</li>`).join('');
-                const prep = (report.prep_list || []).map(item => `<li>${item}</li>`).join('');
-                $('#weatherReport').html(`
-                    <h6 style="color:${entHex};">${report.headline || 'Quantum Weather Report'}</h6>
-                    <p><strong>Road Risk:</strong> ${report.road_risk || 'Unknown'}</p>
-                    <p>${report.route_guidance || ''}</p>
-                    ${windows ? `<p><strong>Hazard Windows</strong></p><ul>${windows}</ul>` : ''}
-                    ${prep ? `<p><strong>Prep List</strong></p><ul>${prep}</ul>` : ''}
-                `);
-            } catch (error) {
-                console.error(error);
-                $('#weatherReport').html('<p>Weather report failed.</p>');
-            }
-        }
-
-        async function fetchQuantumRadar() {
-            const coords = getWeatherCoordinates();
-            if (!coords) { return; }
-            const focus = $('#radarFocus').val();
-            const mode = $('#radarMode').val();
-            $('#quantumRadarOutput').html('<p>Generating quantum radar briefing...</p>');
-            try {
-                const response = await fetch('/api/quantum_radar', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf_token },
-                    body: JSON.stringify({
-                        latitude: coords.lat,
-                        longitude: coords.lon,
-                        focus: focus,
-                        mode: mode
-                    })
-                });
-                if (!response.ok) {
-                    const err = await response.json();
-                    $('#quantumRadarOutput').html(`<p>Error: ${err.error || 'radar failed'}</p>`);
-                    return;
-                }
-                const data = await response.json();
-                const briefing = data.briefing || {};
-                const ideas = (data.ideas || []).map(idea => `
-                    <div class="radar-idea">
-                        <h6>${idea.title || ''}</h6>
-                        <div>${idea.physics || ''}</div>
-                        <div><strong>Pennylane:</strong> ${idea.pennylane || ''}</div>
-                        <div><strong>RAG:</strong> ${idea.rag || ''}</div>
-                    </div>
-                `).join('');
-                $('#quantumRadarOutput').html(`
-                    <div class="weather-chip mb-2">Radar Status: ${briefing.radar_status || 'Unknown'} · ${briefing.confidence || 'Unknown'}</div>
-                    <h6>${briefing.headline || 'Quantum Radar Brief'}</h6>
-                    <p>${briefing.signal_notes || ''}</p>
-                    <div>${ideas}</div>
-                `);
-            } catch (error) {
-                console.error(error);
-                $('#quantumRadarOutput').html('<p>Quantum radar briefing failed.</p>');
-            }
-        }
-
-        $(document).ready(function() {
-            showTab('scanTab');
-            showSection('step1');
-        });
-    </script>
-</body>
-</html>
-    """,
-                                  reports=reports,
-                                  csrf_token=csrf_token,
-                                  preferred_model=preferred_model,
-                                  grok_ready=bool(os.getenv('GROK_API_KEY')),
-                                  llama_ready=llama_local_ready(),
-                                  x_configured=x_configured,
-                                  x_user_id=x_user_id,
-                                  x_dashboard_url=x_dashboard_url,
-                                  admin_blog_backup_url=admin_blog_backup_url,
-                                  admin_local_llm_url=admin_local_llm_url,
-                                  local_llm_url=local_llm_url)
-
-
-def calculate_harm_level(result):
-    if re.search(r'\b(high|severe|critical|urgent|dangerous)\b', result,
-                 re.IGNORECASE):
-        return "High"
-    elif re.search(r'\b(medium|moderate|caution|warning)\b', result,
-                   re.IGNORECASE):
-        return "Medium"
-    elif re.search(r'\b(low|minimal|safe|minor|normal)\b', result,
-                   re.IGNORECASE):
-        return "Low"
-    return "Neutral"
-
+    return redirect(url_for('x_dashboard'))
 
 @app.route('/start_scan', methods=['POST'])
 async def start_scan_route():
@@ -11031,6 +9188,69 @@ async def _fetch_open_meteo_async(lat: float, lon: float, mode: str) -> dict:
         "mode": mode,
         "params": params,
         "forecast": data,
+    }
+
+def _fetch_open_meteo_sync(lat: float, lon: float, mode: str) -> dict:
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "timezone": "auto",
+        "current": _WEATHER_CURRENT_FIELDS,
+    }
+    params.update(_open_meteo_params(mode))
+    r = httpx.get(_OPEN_METEO_BASE_URL, params=params, timeout=16.0)
+    r.raise_for_status()
+    data = r.json()
+    return {
+        "source": "open-meteo",
+        "mode": mode,
+        "params": params,
+        "forecast": data,
+    }
+
+def _x2_build_weather_item(user_id: int | None) -> dict | None:
+    uid = int(user_id) if user_id is not None else None
+    if uid is None:
+        return None
+    lat_raw = vault_get(uid, "x_weather_lat", "")
+    lon_raw = vault_get(uid, "x_weather_lon", "")
+    label = clean_text(vault_get(uid, "x_weather_label", "") or "", 120)
+    if not lat_raw or not lon_raw:
+        return None
+    try:
+        lat = parse_safe_float(lat_raw)
+        lon = parse_safe_float(lon_raw)
+    except Exception:
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None
+    try:
+        payload = _fetch_open_meteo_sync(lat, lon, mode="1day")
+        summary = _summarize_open_meteo(payload.get("forecast", {}) or {})
+    except Exception:
+        return None
+    ent = _weather_entanglement(uid)
+    current = summary.get("current_temp_c")
+    now_temp = f"{current}°C" if current is not None else "--°C"
+    now_weather = summary.get("current_weather") or "Unknown"
+    wind = summary.get("wind_speed")
+    gust = summary.get("wind_gusts")
+    wind_txt = f"Wind {wind} m/s (gust {gust})" if wind is not None else "Wind --"
+    day_hi = summary.get("today_high_c")
+    day_lo = summary.get("today_low_c")
+    day_range = f"{day_lo}°C → {day_hi}°C" if day_hi is not None and day_lo is not None else "--"
+    text = f"{now_weather} · {now_temp} · {wind_txt}"
+    summary_line = f"Today: {day_range} · {summary.get('today_weather') or 'Unknown'}"
+    return {
+        "kind": "weather",
+        "title": f"Weather Scanner{(' · ' + label) if label else ''}",
+        "text": clean_text(text, 280),
+        "summary": clean_text(summary_line, 280),
+        "weather": summary,
+        "entanglement": ent,
+        "dwell_s": 9.5,
+        "ssq": 0.0,
+        "scores": {},
     }
 
 def _summarize_open_meteo(data: dict) -> dict:
@@ -11648,6 +9868,9 @@ def x_dashboard():
     x_bearer = vault_get(uid, "x_bearer", "")
     oai_model = vault_get(uid, "openai_model", X2_DEFAULT_MODEL)
     oai_key = vault_get(uid, "openai_key", "")
+    weather_lat = vault_get(uid, "x_weather_lat", "")
+    weather_lon = vault_get(uid, "x_weather_lon", "")
+    weather_label = vault_get(uid, "x_weather_label", "")
     is_admin = False
     x_test_mode = bool(os.getenv("RGN_X_TEST_API"))
     try:
@@ -11662,7 +9885,7 @@ def x_dashboard():
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="csrf-token" content="{{ csrf_token() }}"/>
-  <title>RGN X Dashboard</title>
+  <title>AX Scanner Dashboard</title>
   <style>
     :root{
       --bg0:#070A12; --bg1:#0B1020; --card:#0E1730; --muted:#97A3C7; --txt:#EAF0FF;
@@ -11772,6 +9995,16 @@ def x_dashboard():
     .navmini a:hover{color:#fff;}
     .hr{height:1px; background: rgba(255,255,255,.08); margin:12px 0;}
     .small{font-size:12px; color:var(--muted); line-height:1.4;}
+    .chipset{display:flex; flex-wrap:wrap; gap:8px;}
+    .chip{
+      padding:6px 10px; border-radius:999px; font-size:12px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04); color:var(--muted);
+    }
+    .glow{
+      background: linear-gradient(120deg, rgba(96,165,250,.22), rgba(52,211,153,.18));
+      border:1px solid rgba(96,165,250,.22);
+    }
   </style>
 </head>
 <body>
@@ -11780,14 +10013,13 @@ def x_dashboard():
       <div class="brand">
         <div class="logo"></div>
         <div>
-          <div class="title">RGN X Dashboard</div>
-          <div class="sub">Per-user PQ-hybrid vault • SSQ carousel • timebox start/stop</div>
+          <div class="title">AX Scanner Dashboard</div>
+          <div class="sub">X intelligence lattice • weather fusion • quantum prompt weave</div>
         </div>
       </div>
       <div class="navmini">
-        <a href="/dashboard">Dashboard</a>
-        <a href="/risk/route">Route Risk</a>
-        <a href="/security">Security</a>
+        <a href="/x">AX Dashboard</a>
+        <a href="/x/settings">XAI Settings</a>
         <a href="/logout">Logout</a>
       </div>
       <div class="row">
@@ -11807,6 +10039,7 @@ def x_dashboard():
             <button class="btn primary" id="btnFetch">Fetch tweets</button>
             <button class="btn" id="btnLabel">Label batch</button>
             <button class="btn" id="btnBuild">Build carousel</button>
+            <button class="btn" id="btnWeather">Weather pulse</button>
           </div>
 
           <div class="row" style="margin-bottom:10px;">
@@ -11840,6 +10073,14 @@ def x_dashboard():
             <div class="small">Tip: paste full secrets; they’ll be stored encrypted. This page only shows masked values.</div>
           </div>
 
+          <div class="field">
+            <label>Weather Scanner (lat/lon stored per user)</label>
+            <input id="weatherLat" placeholder="Latitude" value="{{ weather_lat }}"/>
+            <input id="weatherLon" placeholder="Longitude" value="{{ weather_lon }}"/>
+            <input id="weatherLabel" placeholder="Location label (optional)" value="{{ weather_label }}"/>
+            <div class="small">Add coordinates to fuse live weather into the carousel.</div>
+          </div>
+
           <div class="status" id="status">Ready.</div>
         </div>
       </div>
@@ -11852,6 +10093,16 @@ def x_dashboard():
           <div class="bars" id="bars"></div>
           <div class="hr"></div>
           <div class="small" id="summary"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Weather Scanner</h3>
+        <div class="body">
+          <div class="small">Live forecast snapshots are woven into the carousel for context. Use “Weather pulse” to refresh.</div>
+          <div class="hr"></div>
+          <div class="chipset" id="weatherChips">
+            <div class="chip">Awaiting location + pulse.</div>
+          </div>
         </div>
       </div>
       <div class="card">
@@ -11884,6 +10135,7 @@ def x_dashboard():
   const elText = document.getElementById('text');
   const elBars = document.getElementById('bars');
   const elSummary = document.getElementById('summary');
+  const elWeatherChips = document.getElementById('weatherChips');
 
   let items = [];
   let idx = 0;
@@ -11907,6 +10159,26 @@ def x_dashboard():
     return row;
   }
 
+  function applyWeatherChips(summary, ent){
+    if(!elWeatherChips) return;
+    const entHex = (ent && ent.hex) ? ent.hex : '#60A5FA';
+    const now = summary || {};
+    elWeatherChips.innerHTML = '';
+    const chips = [
+      `Now: ${now.current_temp_c ?? '--'}°C · ${now.current_weather || 'Unknown'}`,
+      `Today: ${now.today_low_c ?? '--'}°C → ${now.today_high_c ?? '--'}°C`,
+      `Wind: ${now.wind_speed ?? '--'} m/s (gust ${now.wind_gusts ?? '--'})`,
+      `Entanglement: ${ent?.qid25?.code || '—'}`
+    ];
+    chips.forEach((c, i)=>{
+      const div = document.createElement('div');
+      div.className = 'chip' + (i === 3 ? ' glow' : '');
+      if(i === 3){ div.style.borderColor = entHex; div.style.color = entHex; }
+      div.textContent = c;
+      elWeatherChips.appendChild(div);
+    });
+  }
+
   function render(){
     if(!items.length){
       elMeta.textContent = '—';
@@ -11917,15 +10189,45 @@ def x_dashboard():
     }
     idx = ((idx % items.length)+items.length)%items.length;
     const it = items[idx];
-    const t = it.tweet || {};
-    const l = it.label || {};
-    elMeta.textContent = `#${idx+1}/${items.length}  [${t.src||'user'}]  @${t.author||'—'}  ${t.created_at||''}  SSQ=${(it.ipm||0).toFixed(2)}  dwell=${(it.dwell_s||0).toFixed(1)}s`;
+    const isWeather = it.kind === 'weather';
+    const t = it.tweet || {
+      author: it.author,
+      created_at: it.created_at,
+      text: it.text,
+      src: it.src
+    };
+    const l = it.label || it.scores || {};
+    const ssq = (it.ipm ?? it.ssq ?? 0);
+    if(isWeather){
+      elMeta.textContent = `#${idx+1}/${items.length}  [weather]  ${it.title || 'Weather Scanner'}  SSQ=${ssq.toFixed(2)}  dwell=${(it.dwell_s||0).toFixed(1)}s`;
+      elText.textContent = it.text || '';
+      elBars.innerHTML = '';
+      const summary = it.weather || {};
+      const stack = document.createElement('div');
+      stack.className = 'chipset';
+      const parts = [
+        `Today: ${summary.today_low_c ?? '--'}°C → ${summary.today_high_c ?? '--'}°C · ${summary.today_weather || 'Unknown'}`,
+        `Wind: ${summary.wind_speed ?? '--'} m/s (gust ${summary.wind_gusts ?? '--'})`,
+      ];
+      parts.forEach(p=>{
+        const c = document.createElement('div');
+        c.className = 'chip';
+        c.textContent = p;
+        stack.appendChild(c);
+      });
+      elBars.appendChild(stack);
+      elSummary.textContent = it.summary || '';
+      applyWeatherChips(summary, it.entanglement || {});
+      return;
+    }
+    elMeta.textContent = `#${idx+1}/${items.length}  [${t.src||'user'}]  @${t.author||'—'}  ${t.created_at||''}  SSQ=${ssq.toFixed(2)}  dwell=${(it.dwell_s||0).toFixed(1)}s`;
     elText.textContent = t.text || '';
     elBars.innerHTML = '';
     const keys = [['neg',l.neg],['sar',l.sar],['tone',l.tone],['edu',l.edu],['truth',l.truth],['cool',l.cool],['click',l.click],['incl',l.incl],['ext',l.ext]];
     keys.forEach(k=> elBars.appendChild(barLine(k[0], k[1]||0)));
-    const tags = (l.tags||[]).slice(0,10).map(x=>`#${x}`).join(' ');
-    elSummary.textContent = (l.summary ? `Summary: ${l.summary}` : '') + (tags ? `  •  ${tags}` : '');
+    const tags = (it.tags || l.tags || []).slice(0,10).map(x=>`#${x}`).join(' ');
+    const summaryText = it.summary || l.summary || '';
+    elSummary.textContent = (summaryText ? `Summary: ${summaryText}` : '') + (tags ? `  •  ${tags}` : '');
   }
 
   async function jpost(url, body){
@@ -11943,9 +10245,26 @@ def x_dashboard():
     setStatus('Loading carousel…');
     const j = await jpost('/x/api/carousel', {timebox_s: timeboxActive ? timeboxLeft : null});
     items = j.items || [];
+    await injectWeatherItem();
     idx = 0;
     render();
     setStatus(`Carousel ready: ${items.length} items.`);
+  }
+
+  async function injectWeatherItem(){
+    try{
+      const j = await jpost('/x/api/weather_item', {});
+      if(!j || !j.item){ return; }
+      const idxExisting = items.findIndex(it=> it && it.kind === 'weather');
+      if(idxExisting >= 0){
+        items[idxExisting] = j.item;
+      } else {
+        items.unshift(j.item);
+      }
+      applyWeatherChips(j.item.weather || {}, j.item.entanglement || {});
+    }catch(e){
+      // silent: weather optional
+    }
   }
 
   function stepNext(){
@@ -12021,6 +10340,14 @@ def x_dashboard():
       await refreshCarousel();
     }catch(e){ setStatus('Build error: '+e.message); }
   };
+  document.getElementById('btnWeather').onclick = async ()=>{
+    try{
+      setStatus('Refreshing weather…');
+      await injectWeatherItem();
+      render();
+      setStatus('Weather pulse synced.');
+    }catch(e){ setStatus('Weather error: '+e.message, 'warn'); }
+  };
 
   document.getElementById('btnNext').onclick = ()=>{ stepNext(); if(autoplay){ stopAutoplay(); } };
   document.getElementById('btnPrev').onclick = ()=>{ stepPrev(); if(autoplay){ stopAutoplay(); } };
@@ -12049,7 +10376,10 @@ def x_dashboard():
         x_user_id: document.getElementById('xUser').value || '',
         x_bearer: document.getElementById('xBearer').value || '',
         openai_key: document.getElementById('oaiKey').value || '',
-        openai_model: document.getElementById('oaiModel').value || ''
+        openai_model: document.getElementById('oaiModel').value || '',
+        weather_lat: document.getElementById('weatherLat').value || '',
+        weather_lon: document.getElementById('weatherLon').value || '',
+        weather_label: document.getElementById('weatherLabel').value || ''
       };
       setStatus('Saving…');
       const j = await jpost('/x/api/settings', body);
@@ -12082,6 +10412,170 @@ def x_dashboard():
         oai_key_mask=_mask_secret(oai_key),
         is_admin=is_admin,
         x_test_mode=x_test_mode,
+        weather_lat=weather_lat,
+        weather_lon=weather_lon,
+        weather_label=weather_label,
+    )
+
+@app.route("/x/settings", methods=["GET"])
+def x_settings():
+    uid = _require_user_id_or_redirect()
+    if not isinstance(uid, int):
+        return uid
+    xai_key = vault_get(uid, "xai_api_key", "")
+    xai_model = vault_get(uid, "xai_model", "grok-2")
+    xai_prompt = vault_get(uid, "xai_system_prompt", "")
+    tpl = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="csrf-token" content="{{ csrf_token() }}"/>
+  <title>AX Scanner • XAI Settings</title>
+  <style>
+    :root{
+      --bg0:#070A12; --bg1:#0B1020; --card:#0E1730; --muted:#97A3C7; --txt:#EAF0FF;
+      --a:#60A5FA; --b:#34D399; --c:#F472B6; --d:#FBBF24; --danger:#FB7185;
+      --br:20px;
+    }
+    *{box-sizing:border-box;}
+    body{
+      margin:0; color:var(--txt);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      background: radial-gradient(1100px 700px at 18% 12%, rgba(96,165,250,.22), transparent 60%),
+                  radial-gradient(900px 650px at 85% 18%, rgba(244,114,182,.18), transparent 55%),
+                  radial-gradient(900px 650px at 50% 90%, rgba(52,211,153,.16), transparent 60%),
+                  linear-gradient(180deg, var(--bg0), var(--bg1));
+      min-height:100vh;
+    }
+    a{color:var(--a); text-decoration:none;}
+    .wrap{max-width:900px; margin:0 auto; padding:22px;}
+    .card{
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      border:1px solid rgba(255,255,255,.08);
+      border-radius: var(--br);
+      box-shadow: 0 16px 55px rgba(0,0,0,.38);
+      overflow:hidden;
+    }
+    .card h3{margin:0; padding:14px 16px; border-bottom:1px solid rgba(255,255,255,.08); font-size:14px; letter-spacing:.3px;}
+    .card .body{padding:16px;}
+    label{font-size:12px; color:var(--muted);}
+    input, textarea{
+      width:100%; padding:10px 12px; border-radius: 14px;
+      background: rgba(5,8,16,.55);
+      border:1px solid rgba(255,255,255,.12);
+      color:var(--txt);
+      outline:none;
+    }
+    textarea{min-height:140px; resize:vertical;}
+    .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
+    .btn{
+      appearance:none; border:none; cursor:pointer;
+      padding:10px 12px; border-radius: 14px;
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.12);
+      color: var(--txt); font-weight:700; letter-spacing:.2px;
+    }
+    .btn.primary{
+      background: linear-gradient(135deg, rgba(96,165,250,.35), rgba(52,211,153,.22));
+      border: 1px solid rgba(96,165,250,.28);
+    }
+    .btn.danger{
+      background: linear-gradient(135deg, rgba(251,113,133,.28), rgba(244,114,182,.18));
+      border: 1px solid rgba(251,113,133,.28);
+    }
+    .status{
+      padding:10px 12px; border-radius:14px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      color: var(--muted); font-size:13px;
+      margin-top:12px;
+    }
+    .chip{
+      display:inline-flex; align-items:center; gap:6px;
+      padding:6px 10px; border-radius:999px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      color:var(--muted); font-size:12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h3>XAI Settings</h3>
+      <div class="body">
+        <div class="row" style="margin-bottom:12px;">
+          <a href="/x" class="chip">← Back to AX Dashboard</a>
+          <a href="/logout" class="chip">Logout</a>
+        </div>
+        <div class="field">
+          <label>XAI API Key</label>
+          <input id="xaiKey" placeholder="XAI API key" value="{{ xai_key_mask }}"/>
+        </div>
+        <div class="field">
+          <label>XAI Model</label>
+          <input id="xaiModel" placeholder="Model (e.g. grok-2)" value="{{ xai_model }}"/>
+        </div>
+        <div class="field">
+          <label>System Prompt (colorized weave)</label>
+          <textarea id="xaiPrompt" placeholder="System prompt for XAI reasoning">{{ xai_prompt }}</textarea>
+        </div>
+        <div class="row">
+          <button class="btn primary" id="btnSaveXai">Save XAI settings</button>
+          <button class="btn danger" id="btnClearXai">Clear XAI key</button>
+        </div>
+        <div class="status" id="status">Ready.</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const csrf = document.querySelector('meta[name=\"csrf-token\"]').getAttribute('content');
+  const hdr = {'Content-Type':'application/json', 'X-CSRFToken': csrf};
+  const status = document.getElementById('status');
+
+  async function jpost(url, body){
+    const r = await fetch(url, {method:'POST', headers: hdr, body: JSON.stringify(body||{})});
+    const t = await r.text();
+    let j = null;
+    try{ j = JSON.parse(t); }catch(e){ j = {ok:false, error:t}; }
+    if(!r.ok || j.ok === false){
+      throw new Error(j.error || ('HTTP '+r.status));
+    }
+    return j;
+  }
+
+  document.getElementById('btnSaveXai').onclick = async ()=>{
+    try{
+      status.textContent = 'Saving...';
+      await jpost('/x/api/xai_settings', {
+        xai_api_key: document.getElementById('xaiKey').value || '',
+        xai_model: document.getElementById('xaiModel').value || '',
+        xai_system_prompt: document.getElementById('xaiPrompt').value || ''
+      });
+      status.textContent = 'Saved. Refresh to see masked key.';
+    }catch(e){ status.textContent = 'Save error: ' + e.message; }
+  };
+
+  document.getElementById('btnClearXai').onclick = async ()=>{
+    if(!confirm('Clear stored XAI key for this account?')) return;
+    try{
+      status.textContent = 'Clearing...';
+      await jpost('/x/api/xai_settings/clear', {});
+      status.textContent = 'XAI key cleared. Refresh to see blank.';
+    }catch(e){ status.textContent = 'Clear error: ' + e.message; }
+  };
+})();
+</script>
+</body>
+</html>"""
+    return render_template_string(
+        tpl,
+        xai_key_mask=_mask_secret(xai_key),
+        xai_model=xai_model or "grok-2",
+        xai_prompt=xai_prompt or "",
     )
 
 @app.route("/x/api/settings", methods=["POST"])
@@ -12106,6 +10600,9 @@ def x_api_settings():
     x_bearer = str(data.get("x_bearer") or "")
     oai_key = str(data.get("openai_key") or "")
     oai_model = clean_text(str(data.get("openai_model") or ""), 128) or X2_DEFAULT_MODEL
+    weather_lat = clean_text(str(data.get("weather_lat") or ""), 32)
+    weather_lon = clean_text(str(data.get("weather_lon") or ""), 32)
+    weather_label = clean_text(str(data.get("weather_label") or ""), 120)
 
     # Model allowlist-ish: keep it simple and safe (no spaces, no control chars)
     if oai_model and not re.fullmatch(r"[A-Za-z0-9._:\-]{1,80}", oai_model):
@@ -12135,6 +10632,22 @@ def x_api_settings():
         vault_set(uid, "openai_model", oai_model)
         wrote.append("openai_model")
 
+    if weather_lat and weather_lon:
+        try:
+            lat = parse_safe_float(weather_lat)
+            lon = parse_safe_float(weather_lon)
+        except Exception:
+            return jsonify({"ok": False, "error": "Invalid weather coordinates"}), 400
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            return jsonify({"ok": False, "error": "Weather coordinates out of range"}), 400
+        vault_set(uid, "x_weather_lat", f"{lat:.6f}")
+        vault_set(uid, "x_weather_lon", f"{lon:.6f}")
+        wrote.append("weather_coords")
+
+    if weather_label:
+        vault_set(uid, "x_weather_label", weather_label)
+        wrote.append("weather_label")
+
     # Optional: return which fields updated (no secrets echoed)
     return jsonify({"ok": True, "updated": wrote})
 
@@ -12155,6 +10668,52 @@ def x_api_settings_clear():
             vault_set(uid, key, "")
             cleared.append(key)
     return jsonify({"ok": True, "cleared": cleared})
+
+@app.route("/x/api/xai_settings", methods=["POST"])
+def x_api_xai_settings():
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+    uid = _require_user_id_or_abort()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "Invalid JSON"}), 400
+
+    xai_key = str(data.get("xai_api_key") or "")
+    xai_model = clean_text(str(data.get("xai_model") or ""), 80) or "grok-2"
+    xai_prompt = str(data.get("xai_system_prompt") or "")
+    xai_prompt = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", xai_prompt)
+    if len(xai_prompt) > 8000:
+        return jsonify({"ok": False, "error": "Prompt too long"}), 400
+
+    if xai_model and not re.fullmatch(r"[A-Za-z0-9._:\-]{1,80}", xai_model):
+        return jsonify({"ok": False, "error": "Invalid xai_model"}), 400
+
+    wrote = []
+    if xai_key and not _is_masked_secret(xai_key):
+        if len(xai_key) > 6000:
+            return jsonify({"ok": False, "error": "xai_api_key too long"}), 400
+        vault_set(uid, "xai_api_key", xai_key)
+        wrote.append("xai_api_key")
+
+    if xai_model:
+        vault_set(uid, "xai_model", xai_model)
+        wrote.append("xai_model")
+
+    if xai_prompt:
+        vault_set(uid, "xai_system_prompt", xai_prompt)
+        wrote.append("xai_system_prompt")
+
+    return jsonify({"ok": True, "updated": wrote})
+
+@app.route("/x/api/xai_settings/clear", methods=["POST"])
+def x_api_xai_settings_clear():
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+    uid = _require_user_id_or_abort()
+    vault_set(uid, "xai_api_key", "")
+    return jsonify({"ok": True, "cleared": ["xai_api_key"]})
     
 @app.route("/x/api/fetch", methods=["POST"])
 def x_api_fetch():
@@ -12247,8 +10806,22 @@ def x_api_carousel():
     except Exception:
         timebox_s = 7 * 60.0
 
-    items = _x2_build_carousel(uid, timebox_s=timebox_s, limit=220)
-    return jsonify({"ok": True, "items": items})
+    payload = _x2_build_carousel(uid, timebox_s=timebox_s, limit=220)
+    if isinstance(payload, dict):
+        payload["ok"] = True
+        return jsonify(payload)
+    return jsonify({"ok": True, "items": payload})
+
+@app.route("/x/api/weather_item", methods=["POST"])
+def x_api_weather_item():
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+    uid = _require_user_id_or_abort()
+    item = _x2_build_weather_item(uid)
+    if not item:
+        return jsonify({"ok": False, "error": "Missing weather settings"}), 400
+    return jsonify({"ok": True, "item": item})
         
 @app.route("/x/api/label", methods=["POST"])
 def x_api_label():
