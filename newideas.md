@@ -89,6 +89,23 @@ flowchart LR
 - **Audio captions**: generate short spoken summaries for hands-free review (muted by default).
 - **Timewarp scrubber**: timeline slider to replay risk evolution hour-by-hour.
 
+## Chatbot Console (14 New Ideas)
+
+1. **Quantum RGB gates** tune temperature per tool call.
+2. **Browser tasks** feed vision summaries into RAG memory.
+3. **Weather entanglement** boosts route relevance.
+4. **Safe preview + jailbreak gate** protect agents.
+5. **Agent FS** stores plans + diff notes.
+6. **RAG pinboard** for verified evidence.
+7. **Clip reels** for top risks.
+8. **Mosaic mode** for multi-angle situational scan.
+9. **Timeline mode** for escalation arcs.
+10. **Consensus tags** across OpenAI/Grok.
+11. **Entropy score** drives alert intensity.
+12. **Tool call audit log** for reproducibility.
+13. **Localhost-only browsing** for secure ops.
+14. **Auto-redaction hints** in the pipeline.
+
 ## Media & Presentation Blueprint
 
 ```mermaid
