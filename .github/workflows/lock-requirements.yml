@@ -31,11 +31,15 @@ jobs:
             cmake ninja-build build-essential pkg-config git
           rm -rf /var/lib/apt/lists/*
 
-      - name: Upgrade pip + install pip-tools
+      # FIX: pip 26+ breaks pip-tools (pip internal API change).
+      # Pin pip<26 and install a recent pip-tools.
+      - name: Install pip (pinned) + pip-tools
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install pip-tools
+          python -m pip install --upgrade "pip<26"
+          python -m pip install --upgrade "pip-tools>=7.5.0"
+          pip --version
+          pip-compile --version
 
       - name: Generate hash-locked requirements.txt
         run: |
@@ -102,7 +106,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # IMPORTANT: heredoc terminator must be seen by bash reliably.
           cat > /tmp/pq_sign_lock.py <<'PY'
           import base64, hashlib, json, os, re, sys
           import oqs
