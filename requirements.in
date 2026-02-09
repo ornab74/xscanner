@@ -18,3 +18,4 @@ gunicorn==23.0.0
 requests==2.31.0
 llama-cpp-python==0.3.16
 liboqs-python==0.14.1
+weaviate-client==4.19.2
