@@ -2264,16 +2264,6 @@ def create_tables():
         )""")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_x2_labels_time ON x2_labels(user_id, created_at)")
 
-        # Ensure forward-compatible columns for x2_labels
-        try:
-            cursor.execute("PRAGMA table_info(x2_labels)")
-            existing_x2_labels = {row[1] for row in cursor.fetchall()}
-            if "title" not in existing_x2_labels:
-                cursor.execute("ALTER TABLE x2_labels ADD COLUMN title TEXT")
-        except Exception:
-            pass
-
-
         cursor.execute("""CREATE TABLE IF NOT EXISTS x2_blacklist (
             user_id INTEGER NOT NULL,
             tid TEXT NOT NULL,
@@ -2359,6 +2349,19 @@ def create_tables():
         )""")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_rag_pinboard_time ON rag_pinboard(user_id, created_at)")
 
+        cursor.execute("""CREATE TABLE IF NOT EXISTS weaviate_memory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            namespace TEXT NOT NULL,
+            ref_id TEXT,
+            memory_key TEXT,
+            payload_json TEXT NOT NULL,
+            payload_enc TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_weaviate_memory_time ON weaviate_memory(user_id, namespace, created_at)")
+
         cursor.execute("""CREATE TABLE IF NOT EXISTS x2_posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -2409,48 +2412,6 @@ def create_tables():
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         )""")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_x_cache_bucket_exp ON x_cache_bucket(expires_at)")
-
-
-        # --- Advanced memory + agent tasks + secure blob vault (2026-02) ---
-        cursor.execute("""CREATE TABLE IF NOT EXISTS user_settings (
-            user_id INTEGER PRIMARY KEY,
-            weaviate_enabled INTEGER NOT NULL DEFAULT 0,
-            memory_style TEXT NOT NULL DEFAULT 'balanced',
-            rag_max_chunks INTEGER NOT NULL DEFAULT 8,
-            agent_enabled INTEGER NOT NULL DEFAULT 1,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        )""")
-        cursor.execute("""CREATE TABLE IF NOT EXISTS agent_tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            prompt TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'queued',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            result_text TEXT DEFAULT NULL,
-            error_text TEXT DEFAULT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        )""")
-        cursor.execute("""CREATE TABLE IF NOT EXISTS vault_files (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            task_id INTEGER DEFAULT NULL,
-            logical_name TEXT NOT NULL,
-            mime TEXT NOT NULL,
-            sha256_hex TEXT NOT NULL,
-            size_bytes INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            expires_at TEXT DEFAULT NULL,
-            data_enc BLOB NOT NULL,
-            label_rgb TEXT DEFAULT NULL,
-            meta_json TEXT DEFAULT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-            FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL
-        )""")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_vault_files_user ON vault_files(user_id, created_at)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_vault_files_task ON vault_files(task_id)")
 
         db.commit()
     print("Database tables created and verified successfully.")
@@ -3145,6 +3106,38 @@ _PHF_JAILBREAK_PHRASES = [
 ]
 _PHF_JAILBREAK_HASHES = {hashlib.sha256(p.lower().encode("utf-8")).hexdigest(): p for p in _PHF_JAILBREAK_PHRASES}
 
+_CHATBOT_MD_ALLOWED_TAGS = [
+    "p", "pre", "code", "strong", "em", "ul", "ol", "li", "blockquote",
+    "a", "h1", "h2", "h3", "h4", "h5", "h6", "table", "thead", "tbody",
+    "tr", "th", "td", "hr", "br", "span",
+]
+_CHATBOT_MD_ALLOWED_ATTRS = {
+    "a": ["href", "title", "target", "rel"],
+    "span": ["class"],
+    "th": ["colspan", "rowspan"],
+    "td": ["colspan", "rowspan"],
+}
+
+
+def _render_chat_markdown(text: str) -> str:
+    source = (text or "").strip()
+    if not source:
+        return ""
+    html = markdown(
+        source,
+        extras=["fenced-code-blocks", "tables", "break-on-newline", "code-friendly"],
+        safe_mode="escape",
+    )
+    cleaned = bleach.clean(
+        html,
+        tags=_CHATBOT_MD_ALLOWED_TAGS,
+        attributes=_CHATBOT_MD_ALLOWED_ATTRS,
+        protocols=["http", "https", "mailto"],
+        strip=True,
+    )
+    cleaned = bleach.linkify(cleaned, callbacks=[bleach.callbacks.nofollow])
+    return cleaned
+
 def _phf_scan_jailbreak(text: str) -> list[dict]:
     """PHF-style scan: hashed phrase lookup + simple heuristics."""
     if not text:
@@ -3202,6 +3195,13 @@ def _x2_blacklist_tweet(uid: int, tid: str, src: str, text: str, hit: dict) -> N
             ),
         )
         conn.commit()
+    _weaviate_memory_upsert(
+        uid,
+        "jailbreak",
+        weaviate_payload,
+        ref_id=tid,
+        memory_key=pattern or "jailbreak",
+    )
 
 def _x2_scan_and_blacklist(uid: int, tweets: list[dict]) -> dict:
     flagged = []
@@ -3284,7 +3284,7 @@ def _redact_sensitive(text: str) -> str:
     if not text:
         return ""
     text = re.sub(r"([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+)", "[redacted-email]@[redacted]", text)
-    text = re.sub(r"\\b(\\+?\\d[\\d\\s\\-().]{7,}\\d)\\b", "[redacted-phone]", text)
+    text = re.sub(r"\b(\+?\d[\d\s().-]{7,}\d)\b", "[redacted-phone]", text)
     return text
 
 def _agent_touch_session(uid: int, agent_name: str) -> None:
@@ -3425,6 +3425,70 @@ def _rag_pin_list(uid: int, limit: int = 30) -> list[dict[str, Any]]:
         })
     return pins
 
+def _weaviate_memory_upsert(
+    uid: int,
+    namespace: str,
+    payload: dict,
+    ref_id: str = "",
+    memory_key: str = "",
+) -> int:
+    ns = clean_text(namespace or "general", 48) or "general"
+    ref = clean_text(ref_id or "", 120)
+    mkey = clean_text(memory_key or "", 120)
+    payload_json = json.dumps(payload or {}, ensure_ascii=False)
+    payload_enc = _agent_encrypt_payload(payload or {})
+    with _x2_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO weaviate_memory
+               (user_id, namespace, ref_id, memory_key, payload_json, payload_enc, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (uid, ns, ref or None, mkey or None, payload_json, payload_enc, now_iso()),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+
+
+def _weaviate_memory_list(uid: int, namespace: str = "", limit: int = 30) -> list[dict[str, Any]]:
+    ns = clean_text(namespace or "", 48)
+    with _x2_db() as conn:
+        if ns:
+            rows = conn.execute(
+                """SELECT id, namespace, ref_id, memory_key, payload_json, payload_enc, created_at
+                   FROM weaviate_memory WHERE user_id=? AND namespace=?
+                   ORDER BY id DESC LIMIT ?""",
+                (uid, ns, int(limit)),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT id, namespace, ref_id, memory_key, payload_json, payload_enc, created_at
+                   FROM weaviate_memory WHERE user_id=?
+                   ORDER BY id DESC LIMIT ?""",
+                (uid, int(limit)),
+            ).fetchall()
+    out = []
+    for row in rows or []:
+        payload = {}
+        if row[4]:
+            try:
+                payload = json.loads(row[4])
+            except Exception:
+                payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        if not payload and row[5]:
+            dec = _agent_decrypt_payload(row[5])
+            payload = dec if isinstance(dec, dict) else {}
+        out.append({
+            "id": row[0],
+            "namespace": row[1],
+            "ref_id": row[2] or "",
+            "memory_key": row[3] or "",
+            "payload": payload,
+            "created_at": row[6],
+        })
+    return out
+
+
 def _safe_localhost_url(url: str) -> Optional[str]:
     url = (url or "").strip()
     if not url:
@@ -3487,9 +3551,9 @@ def _weather_rag_context(uid: int) -> dict:
 def _chat_llm_response(model_key: str, prompt: str, temperature: float) -> str:
     model_key = (model_key or "openai").strip().lower()
     if model_key == "grok":
-        out = asyncio.run(run_grok_completion(prompt, temperature=temperature, max_tokens=600)) if get_xai_api_key() else None
-        return out or "Grok unavailable. Add XAI_API_KEY or GROK_API_KEY to enable."
-    out = asyncio.run(run_openai_response_text(prompt, max_output_tokens=600, temperature=temperature, reasoning_effort="none")) if get_openai_api_key() else None
+        out = asyncio.run(run_grok_completion(prompt, temperature=temperature, max_tokens=600)) if os.getenv("GROK_API_KEY") else None
+        return out or "Grok unavailable. Add GROK_API_KEY to enable."
+    out = asyncio.run(run_openai_response_text(prompt, max_output_tokens=600, temperature=temperature, reasoning_effort="none")) if os.getenv("OPENAI_API_KEY") else None
     return out or "OpenAI unavailable. Add OPENAI_API_KEY to enable."
 
 
@@ -11715,15 +11779,15 @@ def x_settings():
     uid = _require_user_id_or_redirect()
     if not isinstance(uid, int):
         return uid
-    x_user = get_x_user_id(uid)
-    x_bearer = get_x_bearer_token(uid)
+    x_user = vault_get(uid, "x_user_id", "")
+    x_bearer = vault_get(uid, "x_bearer", "")
     oai_model = vault_get(uid, "openai_model", X2_DEFAULT_MODEL)
     oai_key = vault_get(uid, "openai_key", "")
     weather_lat = vault_get(uid, "x_weather_lat", "")
     weather_lon = vault_get(uid, "x_weather_lon", "")
     weather_label = vault_get(uid, "x_weather_label", "")
     preferred_model = get_user_preferred_model(uid) or "openai"
-    xai_key_env = (os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY") or "").strip()
+    xai_key_env = os.getenv("XAI_API_KEY", "")
     xai_model_env = os.getenv("XAI_MODEL", "")
     xai_key = xai_key_env or vault_get(uid, "xai_api_key", "")
     xai_model = xai_model_env or vault_get(uid, "xai_model", "grok-2")
@@ -11860,6 +11924,53 @@ def x_settings():
         <div class="field">
           <label>XAI API Key</label>
           <input id="xaiKey" placeholder="XAI API key"
+                 value="{{ xai_key_mask }}"
+                 {% if xai_env_locked %}disabled{% endif %}/>
+          {% if xai_env_locked %}
+          <div class="small">XAI API key is managed by the <span class="kbd">XAI_API_KEY</span> environment variable.</div>
+          {% endif %}
+        </div>
+        <div class="field">
+          <label>X bearer token</label>
+          <input id="xBearer" placeholder="X bearer token" value="{{ x_bearer_mask }}"/>
+        </div>
+        <div class="field">
+          <label>OpenAI API key</label>
+          <input id="oaiKey" placeholder="OpenAI API key" value="{{ oai_key_mask }}"/>
+        </div>
+        <div class="field">
+          <label>OpenAI model</label>
+          <input id="oaiModel" placeholder="Model (e.g. gpt-4.1-mini)" value="{{ oai_model }}"/>
+        </div>
+        <div class="field">
+          <label>Preferred model type</label>
+          <select id="preferredModel">
+            <option value="openai" {% if preferred_model == 'openai' %}selected{% endif %}>OpenAI</option>
+            <option value="grok" {% if preferred_model == 'grok' %}selected{% endif %}>Grok</option>
+            <option value="llama_local" {% if preferred_model == 'llama_local' %}selected{% endif %}>Local Llama</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Weather Scanner (lat/lon stored per user)</label>
+          <input id="weatherLat" placeholder="Latitude" value="{{ weather_lat }}"/>
+          <input id="weatherLon" placeholder="Longitude" value="{{ weather_lon }}"/>
+          <input id="weatherLabel" placeholder="Location label (optional)" value="{{ weather_label }}"/>
+          <div class="small">Add coordinates to fuse live weather into the carousel.</div>
+        </div>
+        <div class="row">
+          <button class="btn primary" id="btnSaveX">Save settings</button>
+          <button class="btn danger" id="btnClearX">Clear secrets</button>
+        </div>
+        <div class="status" id="statusX">Ready.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>XAI Settings</h3>
+      <div class="body">
+        <div class="field">
+          <label>XAI API Key</label>
+          <input id="xaiKey" placeholder="XAI API key"
                  value="{{ xai_key_mask }}"/>
           {% if xai_env_locked %}
           <div class="small">Env key detected (<span class="kbd">XAI_API_KEY</span> / <span class="kbd">GROK_API_KEY</span>). By default it is used at runtime; your saved key is kept as encrypted fallback. Set <span class="kbd">PREFER_ENV_XAI=0</span> to prefer the encrypted vault.</div>
@@ -11931,7 +12042,7 @@ def x_settings():
     try{
       status.textContent = 'Saving...';
       await jpost('/x/api/xai_settings', {
-        xai_api_key: (document.getElementById('xaiKey').value || ''),
+        xai_api_key: xaiEnvLocked ? '' : (document.getElementById('xaiKey').value || ''),
         xai_model: document.getElementById('xaiModel').value || '',
         xai_system_prompt: document.getElementById('xaiPrompt').value || ''
       });
@@ -12076,7 +12187,8 @@ def x_api_xai_settings():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"ok": False, "error": "Invalid JSON"}), 400
-    xai_key_env = (os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY") or "").strip()
+
+    xai_key_env = os.getenv("XAI_API_KEY", "")
     xai_key = str(data.get("xai_api_key") or "")
     xai_model = clean_text(str(data.get("xai_model") or ""), 80) or "grok-2"
     xai_prompt = str(data.get("xai_system_prompt") or "")
@@ -12087,6 +12199,8 @@ def x_api_xai_settings():
     if xai_model and not re.fullmatch(r"[A-Za-z0-9._:\-]{1,80}", xai_model):
         return jsonify({"ok": False, "error": "Invalid xai_model"}), 400
     wrote = []
+    if xai_key_env:
+        xai_key = ""
     if xai_key and not _is_masked_secret(xai_key):
         if len(xai_key) > 6000:
             return jsonify({"ok": False, "error": "xai_api_key too long"}), 400
@@ -12109,7 +12223,8 @@ def x_api_xai_settings_clear():
     if csrf_fail:
         return csrf_fail
     uid = _require_user_id_or_abort()
-    # Always allow clearing the stored key. If env is set and preferred, it will still be used at runtime.
+    if os.getenv("XAI_API_KEY"):
+        return jsonify({"ok": False, "error": "XAI_API_KEY managed by environment"}), 400
     vault_set(uid, "xai_api_key", "")
     return jsonify({"ok": True, "cleared": ["xai_api_key"]})
     
@@ -12530,6 +12645,9 @@ def chatbot_console():
     .bubble .status{
       position:absolute; right:8px; bottom:-16px; font-size:11px; color:var(--muted);
     }
+    .md p{margin:.3rem 0;}
+    .md pre{overflow:auto;}
+    .md code{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;}
     .row{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
     .btn{
       border:none; padding:10px 12px; border-radius:12px; cursor:pointer;
@@ -12609,6 +12727,12 @@ def chatbot_console():
           <button class="btn" id="pinRefresh">Refresh pins</button>
         </div>
         <pre id="pinList">No pins yet.</pre>
+        <h3>Weaviate Memory</h3>
+        <div class="small">Shared memory journal used by agent tools and jailbreak logs.</div>
+        <div class="row" style="margin-top:10px;">
+          <button class="btn" id="memoryRefresh">Refresh memory</button>
+        </div>
+        <pre id="memoryList">No memory yet.</pre>
         <div class="hr" style="height:1px;background:rgba(255,255,255,.08);margin:12px 0;"></div>
         <h3>14 New Ideas (Tied Together)</h3>
         <div class="small" id="ideaList">Loading ideas…</div>
@@ -12635,6 +12759,7 @@ def chatbot_console():
     const modelSelect = document.getElementById('modelSelect');
     const pinList = document.getElementById('pinList');
     const ideaList = document.getElementById('ideaList');
+    const memoryList = document.getElementById('memoryList');
     let chatMode = 'agent';
 
     async function jpost(url, body){
@@ -12665,7 +12790,14 @@ def chatbot_console():
       (j.messages || []).forEach(m=>{
         const div = document.createElement('div');
         div.className = 'bubble ' + (m.role === 'user' ? 'user' : 'ai');
-        div.textContent = m.text;
+        const body = document.createElement('div');
+        body.className = 'md';
+        if (m.html){
+          body.innerHTML = m.html;
+        }else{
+          body.textContent = m.text || '';
+        }
+        div.appendChild(body);
         const st = document.createElement('div');
         st.className = 'status';
         st.textContent = m.status || '';
@@ -12684,6 +12816,18 @@ def chatbot_console():
         const summary = p.summary ? `\\n  ${p.summary}` : '';
         return `• ${p.title}${tags}\\n  ${source}${summary}`;
       }).join('\\n') || 'No pins yet.';
+    }
+
+
+    async function refreshMemory(){
+      if(!memoryList){ return; }
+      const j = await jpost('/chatbot/api/memory/list', {});
+      memoryList.textContent = (j.memories || []).map(m=>{
+        const payload = m.payload || {};
+        const summary = payload.summary || payload.excerpt || payload.reason || '';
+        const ref = m.ref_id ? ` ref:${m.ref_id}` : '';
+        return `• [${m.namespace}] ${payload.title || payload.pattern || payload.memory_key || 'entry'}${ref}\n  ${summary}`;
+      }).join('\n') || 'No memory yet.';
     }
 
     async function refreshIdeas(){
@@ -12790,6 +12934,11 @@ def chatbot_console():
 
     document.getElementById('pinRefresh').onclick = async ()=>{
       await refreshPins();
+      await refreshMemory();
+    };
+
+    document.getElementById('memoryRefresh').onclick = async ()=>{
+      await refreshMemory();
     };
 
     document.getElementById('fsWrite').onclick = async ()=>{
@@ -12817,6 +12966,7 @@ def chatbot_console():
     refreshAgents();
     refreshHistory();
     refreshPins();
+    refreshMemory();
     refreshIdeas();
     setMode('agent');
   })();
@@ -12982,8 +13132,15 @@ def chatbot_api_pin_add():
     if not title:
         return jsonify({"ok": False, "error": "Missing title"}), 400
     pin_id = _rag_pin_add(uid, title, summary, source_url, tags_clean)
-    _agent_log_event(uid, _agent_pick(uid), "pin_add", {"title": title, "source_url": source_url})
-    return jsonify({"ok": True, "pin_id": pin_id})
+    memory_id = _weaviate_memory_upsert(
+        uid,
+        "pinboard",
+        {"title": title, "summary": summary, "source_url": source_url, "tags": tags_clean},
+        ref_id=str(pin_id),
+        memory_key=title,
+    )
+    _agent_log_event(uid, _agent_pick(uid), "pin_add", {"title": title, "source_url": source_url, "memory_id": memory_id})
+    return jsonify({"ok": True, "pin_id": pin_id, "memory_id": memory_id})
 
 @app.post("/chatbot/api/pin/list")
 def chatbot_api_pin_list():
@@ -12993,6 +13150,17 @@ def chatbot_api_pin_list():
     uid = _require_user_id_or_abort()
     pins = _rag_pin_list(uid, limit=40)
     return jsonify({"ok": True, "pins": pins})
+
+@app.post("/chatbot/api/memory/list")
+def chatbot_api_memory_list():
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+    uid = _require_user_id_or_abort()
+    data = request.get_json(silent=True) or {}
+    namespace = clean_text(str(data.get("namespace") or ""), 48)
+    memories = _weaviate_memory_list(uid, namespace=namespace, limit=40)
+    return jsonify({"ok": True, "memories": memories})
 
 @app.post("/chatbot/api/ideas")
 def chatbot_api_ideas():
@@ -13096,9 +13264,11 @@ def chatbot_api_history():
         ).fetchall()
     for row in reversed(rows or []):
         payload = _agent_decrypt_payload(row[2])
+        text = str(payload.get("text") or "")
         messages.append({
             "role": "user" if row[1] == "chat_user" else "ai",
-            "text": payload.get("text") or "",
+            "text": text,
+            "html": _render_chat_markdown(text),
             "status": payload.get("status") or "",
         })
     tasks = []
@@ -13147,7 +13317,14 @@ def chatbot_api_message():
     reply = _chat_llm_response(model_key, prompt, temperature=float(temp))
     status = "✓✓" if "unavailable" not in reply.lower() else "⚠"
     _agent_log_event(uid, agent, "chat_ai", {"text": reply, "status": status, "tools": tool_calls})
-    return jsonify({"ok": True, "reply": reply, "status": status, "tools": tool_calls, "note": "response_ready"})
+    return jsonify({
+        "ok": True,
+        "reply": reply,
+        "reply_html": _render_chat_markdown(reply),
+        "status": status,
+        "tools": tool_calls,
+        "note": "response_ready",
+    })
 
 @app.route("/x/admin", methods=["GET", "POST"])
 def x_admin():
