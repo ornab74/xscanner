@@ -4965,7 +4965,7 @@ def build_topbar_html(active: str = "") -> str:
     links = [
         ("home", "Home", "home"),
         ("x", "XAI Feed", "x_dashboard"),
-        ("weather", "Weather", "x_dashboard"),
+        ("weather", "Weather", "x_weather"),
         ("chatbot", "Chatbot", "chatbot_console"),
         ("settings", "Settings", "x_settings"),
         ("login", "Login", "login"),
@@ -11698,6 +11698,88 @@ def x_tromodel():
         preferred_model=(preferred_model or "openai").strip().lower(),
         oai_model=oai_model or X2_DEFAULT_MODEL,
         xai_model=xai_model or "grok-2",
+    )
+
+
+
+@app.route("/x/weather", methods=["GET"])
+def x_weather():
+    uid = _require_user_id_or_redirect()
+    if not isinstance(uid, int):
+        return uid
+    weather_lat = vault_get(uid, "x_weather_lat", "")
+    weather_lon = vault_get(uid, "x_weather_lon", "")
+    weather_label = vault_get(uid, "x_weather_label", "")
+    tpl = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="csrf-token" content="{{ csrf_token() }}"/>
+  <title>AX Scanner • Weather</title>
+  <style>
+    body{margin:0;background:#0b1020;color:#eaf0ff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;}
+    .wrap{max-width:900px;margin:0 auto;padding:22px;}
+    .card{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:18px;padding:16px;}
+    .btn{border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:#eaf0ff;border-radius:12px;padding:10px 12px;cursor:pointer;font-weight:700;}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+    .status{margin-top:12px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.25)}
+    .small{font-size:13px;color:rgba(255,255,255,.75)}
+    .chip{display:inline-block;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06)}
+    {{ topbar_css|safe }}
+  </style>
+</head>
+<body>
+  {{ topbar_html|safe }}
+  <div class="wrap">
+    <div class="card">
+      <h3 style="margin-top:0">Weather Scanner</h3>
+      <div class="small">Use this tab to validate weather feed status for the X pipeline.</div>
+      <div class="row" style="margin-top:10px">
+        <span class="chip">Lat: {{ weather_lat or 'not set' }}</span>
+        <span class="chip">Lon: {{ weather_lon or 'not set' }}</span>
+        <span class="chip">Label: {{ weather_label or 'none' }}</span>
+        <a class="btn" href="/x/settings">Open Weather Settings</a>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="btnPulse">Weather pulse</button>
+      </div>
+      <div class="status" id="status">Ready.</div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    const csrf = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+    const status = document.getElementById('status');
+    async function jpost(url, body){
+      const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrf}, credentials:'same-origin', body: JSON.stringify(body||{})});
+      const t = await r.text();
+      let j = null;
+      try{ j = JSON.parse(t); }catch(e){ j = {ok:false,error:t}; }
+      if(!r.ok || j.ok === false){ throw new Error(j.error || ('HTTP '+r.status)); }
+      return j;
+    }
+    document.getElementById('btnPulse').onclick = async ()=>{
+      status.textContent = 'Fetching weather...';
+      try{
+        const j = await jpost('/x/api/weather_item', {});
+        const w = j.item && j.item.weather ? j.item.weather : {};
+        status.textContent = `Now ${w.current_temp_c ?? '--'}°C • ${w.current_weather || 'Unknown'} • Wind ${w.wind_speed ?? '--'} m/s`;
+      }catch(e){
+        status.textContent = 'Weather error: ' + e.message;
+      }
+    };
+  })();
+  </script>
+</body>
+</html>"""
+    return render_template_string(
+        tpl,
+        weather_lat=weather_lat,
+        weather_lon=weather_lon,
+        weather_label=weather_label,
+        topbar_css=_TOPBAR_CSS,
+        topbar_html=build_topbar_html("weather"),
     )
 
 @app.route("/x/settings", methods=["GET"])
