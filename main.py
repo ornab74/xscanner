@@ -2704,7 +2704,16 @@ def vault_set(user_id: int, key: str, value: str) -> None:
     """Store per-user secrets/settings in user_vault (PQ-hybrid encrypted)."""
     user_id = int(user_id)
     k = clean_text(key, 64)
-    v = clean_text(value, 6000)
+    # Preserve user-entered secret/model/prompt values verbatim (including
+    # newlines/symbols) while still removing dangerous control bytes.
+    try:
+        v = "" if value is None else str(value)
+    except Exception:
+        v = ""
+    v = v.replace("\x00", "")
+    v = re.sub(r"[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]", "", v)
+    if len(v) > 6000:
+        v = v[:6000]
     ctx = build_hd_ctx(domain="user_vault", field=k, rid=f"u{user_id}")
     blob = encrypt_data(v.encode("utf-8"), ctx)
     with _x2_db() as conn:
@@ -2725,9 +2734,11 @@ def vault_get(user_id: int, key: str, default: str = "") -> str:
         return default
     try:
         ctx = build_hd_ctx(domain="user_vault", field=k, rid=f"u{user_id}")
-        pt = decrypt_data(row["v_enc"], ctx)
-        return clean_text(pt.decode("utf-8", errors="ignore"), 6000) or default
-    except Exception:
+        pt = decrypt_data(row["v_enc"])
+        out = str(pt or "").replace("\x00", "")
+        return out[:6000] if out else default
+    except Exception as e:
+        logger.debug("vault_get decrypt failed user_id=%s key=%s err=%s", user_id, k, e)
         return default
 
 
@@ -8596,9 +8607,7 @@ def login():
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 
     
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/typeface-orbitron/1.1.13/index.min.css" integrity="sha384-Wk0o7Q4V2rHh0sR7T5pQKZ8xU3Y6JXb5w2aG3Jr0r8GkP6gI7lqV9GqV2o2r3ZxA" crossorigin="anonymous">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-          integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}">
 
     <style>
         body {
@@ -8796,16 +8805,8 @@ def register():
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
     <meta name="csrf-token" content="{{ csrf_token() }}">
 
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-roboto/1.1.13/index.min.css" rel="stylesheet"
-          integrity="sha384-2V4P1oTyWcCwZqZ9LP8y8QL4mFQZVfrSez2yYcXgD1hlXQW2K9eK7oV5L9c3NPGp" crossorigin="anonymous">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-orbitron/1.1.13/index.min.css" rel="stylesheet"
-          integrity="sha384-Wk0o7Q4V2rHh0sR7T5pQKZ8xU3Y6JXb5w2aG3Jr0r8GkP6gI7lqV9GqV2o2r3ZxA" crossorigin="anonymous">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-          integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
-    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.15.4/css/all.css"
-          integrity="sha384-dyZ88mC6Up2uqS4h/KRgHuoeGwBcD4Ng9SiP4dIRy0EXT9KPU5t5Q0eP5B8vgc7X" crossorigin="anonymous">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet.css') }}">
 
     <style>
         body {
@@ -9274,15 +9275,15 @@ def settings():
     <div class="sidebar">
         <div class="navbar-brand">QRS</div>
         <a href="{{ url_for('dashboard') }}" class="nav-link {% if active_page == 'dashboard' %}active{% endif %}">
-            <i class="fas fa-home"></i> <span>Dashboard</span>
+            <span aria-hidden="true">🏠</span> <span>Dashboard</span>
         </a>
         {% if session.get('is_admin') %}
         <a href="{{ url_for('settings') }}" class="nav-link {% if active_page == 'settings' %}active{% endif %}">
-            <i class="fas fa-cogs"></i> <span>Settings</span>
+            <span aria-hidden="true">⚙️</span> <span>Settings</span>
         </a>
         {% endif %}
         <a href="{{ url_for('logout') }}" class="nav-link">
-            <i class="fas fa-sign-out-alt"></i> <span>Logout</span>
+            <span aria-hidden="true">↩</span> <span>Logout</span>
         </a>
     </div>
 
@@ -9369,10 +9370,8 @@ def settings():
         </ul>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
-            integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
+    <script src="{{ url_for('static', filename='vendor/bootstrap.bundle.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/leaflet.js') }}"></script>
 
 </body>
 </html>
@@ -11644,6 +11643,7 @@ def x_tromodel():
   </style>
 </head>
 <body>
+  {{ topbar_html|safe }}
   <div class="wrap">
     <div class="topbar">
       <div>
@@ -12069,18 +12069,23 @@ def x_api_settings():
 
     x_bearer = str(data.get("x_bearer") or "")
     oai_key = str(data.get("openai_key") or "")
-    oai_model = clean_text(str(data.get("openai_model") or ""), 128) or X2_DEFAULT_MODEL
+    has_oai_model = "openai_model" in data
+    oai_model = clean_text(str(data.get("openai_model") or ""), 128) if has_oai_model else ""
+    if has_oai_model and not oai_model:
+        oai_model = X2_DEFAULT_MODEL
     weather_lat = clean_text(str(data.get("weather_lat") or ""), 32)
     weather_lon = clean_text(str(data.get("weather_lon") or ""), 32)
     weather_label = clean_text(str(data.get("weather_label") or ""), 120)
     preferred_model = clean_text(str(data.get("preferred_model") or ""), 32).lower()
 
     # Model allowlist-ish: keep it simple and safe (no spaces, no control chars)
-    if oai_model and not re.fullmatch(r"[A-Za-z0-9._:\-]{1,80}", oai_model):
+    if has_oai_model and oai_model and not re.fullmatch(r"[A-Za-z0-9._:\-]{1,80}", oai_model):
         return jsonify({"ok": False, "error": "Invalid openai_model"}), 400
 
     # ---- write-through to per-user PQ-hybrid vault (only if unmasked) ----
     wrote = []
+    logger.debug("[x_api_settings] uid=%s payload flags x_user_id=%s x_bearer=%s openai_key=%s openai_model=%s weather_lat=%s weather_lon=%s weather_label=%s preferred_model=%s",
+                 uid, bool(x_user_id), bool(x_bearer), bool(oai_key), bool(oai_model), bool(weather_lat), bool(weather_lon), bool(weather_label), bool(preferred_model))
 
     if x_user_id:
         vault_set(uid, "x_user_id", x_user_id)
@@ -12099,7 +12104,7 @@ def x_api_settings():
         vault_set(uid, "openai_key", oai_key)
         wrote.append("openai_key")
 
-    if oai_model:
+    if has_oai_model and oai_model:
         vault_set(uid, "openai_model", oai_model)
         wrote.append("openai_model")
 
@@ -12126,6 +12131,17 @@ def x_api_settings():
         wrote.append("weather_label")
 
     # Optional: return which fields updated (no secrets echoed)
+    verify = {
+        "x_user_id": bool(vault_get(uid, "x_user_id", "")),
+        "x_bearer": bool(vault_get(uid, "x_bearer", "")),
+        "openai_key": bool(vault_get(uid, "openai_key", "")),
+        "openai_model": vault_get(uid, "openai_model", ""),
+        "x_weather_lat": vault_get(uid, "x_weather_lat", ""),
+        "x_weather_lon": vault_get(uid, "x_weather_lon", ""),
+        "x_weather_label": vault_get(uid, "x_weather_label", ""),
+        "preferred_model": get_user_preferred_model(uid),
+    }
+    logger.debug("[x_api_settings] uid=%s updated=%s verify=%s", uid, wrote, verify)
     return jsonify({"ok": True, "updated": wrote})
 
 @app.route("/x/api/settings/clear", methods=["POST"])
@@ -12159,16 +12175,20 @@ def x_api_xai_settings():
     xai_key_env = os.getenv("XAI_API_KEY", "")
     openai_key_env = os.getenv("OPENAI_API_KEY", "")
     xai_key = str(data.get("xai_api_key") or "")
-    xai_model = clean_text(str(data.get("xai_model") or ""), 80) or "grok-2"
+    has_xai_model = "xai_model" in data
+    xai_model = clean_text(str(data.get("xai_model") or ""), 80) if has_xai_model else ""
+    if has_xai_model and not xai_model:
+        xai_model = "grok-2"
     xai_prompt = str(data.get("xai_system_prompt") or "")
     xai_prompt = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", xai_prompt)
     if len(xai_prompt) > 8000:
         return jsonify({"ok": False, "error": "Prompt too long"}), 400
 
-    if xai_model and not re.fullmatch(r"[A-Za-z0-9._:\-]{1,80}", xai_model):
+    if has_xai_model and xai_model and not re.fullmatch(r"[A-Za-z0-9._:\-]{1,80}", xai_model):
         return jsonify({"ok": False, "error": "Invalid xai_model"}), 400
 
     wrote = []
+    logger.debug("[x_api_xai_settings] uid=%s payload flags xai_api_key=%s xai_model=%s xai_prompt=%s xai_env_locked=%s openai_env=%s", uid, bool(xai_key), bool(xai_model), bool(xai_prompt), bool(xai_key_env), bool(openai_key_env))
     if xai_key_env:
         xai_key = ""
     if xai_key and not _is_masked_secret(xai_key):
@@ -12177,7 +12197,7 @@ def x_api_xai_settings():
         vault_set(uid, "xai_api_key", xai_key)
         wrote.append("xai_api_key")
 
-    if xai_model:
+    if has_xai_model and xai_model:
         vault_set(uid, "xai_model", xai_model)
         wrote.append("xai_model")
 
@@ -12185,6 +12205,12 @@ def x_api_xai_settings():
         vault_set(uid, "xai_system_prompt", xai_prompt)
         wrote.append("xai_system_prompt")
 
+    verify = {
+        "xai_api_key": bool(vault_get(uid, "xai_api_key", "")),
+        "xai_model": vault_get(uid, "xai_model", ""),
+        "xai_system_prompt_len": len(vault_get(uid, "xai_system_prompt", "")),
+    }
+    logger.debug("[x_api_xai_settings] uid=%s updated=%s verify=%s", uid, wrote, verify)
     return jsonify({"ok": True, "updated": wrote})
 
 @app.route("/x/api/xai_settings/clear", methods=["POST"])
@@ -12667,8 +12693,8 @@ def chatbot_console():
             <textarea class="input" id="chatInput" rows="3" placeholder="Message the agent… (Ctrl+Enter to send)"></textarea>
             <div class="composer-actions">
               <input id="composerZipFile" type="file" accept=".zip" style="display:none"/>
-              <button class="btn icon-btn" id="composerZipBtn" title="Upload codebase ZIP">＋</button>
-              <button class="btn" id="sendChat">Send</button>
+              <button type="button" class="btn icon-btn" id="composerZipBtn" title="Upload codebase ZIP">＋</button>
+              <button type="button" class="btn" id="sendChat">Send</button>
             </div>
           </div>
           <div class="row">
@@ -12871,7 +12897,8 @@ def chatbot_console():
       }
     });
 
-    sendBtnEl.onclick = async ()=>{
+    sendBtnEl.addEventListener('click', async (ev)=>{
+      ev.preventDefault();
       chatStatus.textContent = 'Sending…';
       try{
         const message = document.getElementById('chatInput').value || '';
@@ -12882,7 +12909,7 @@ def chatbot_console():
         await refreshAgents();
         await refreshHistory();
       }catch(e){ chatStatus.textContent = e.message; }
-    };
+    });
 
     document.getElementById('callLocalhost').onclick = async ()=>{
       toolStatus.textContent = 'Fetching…';
