@@ -99,6 +99,21 @@ class SealedCache(TypedDict, total=False):
     kem_alg: str
     sig_alg: str
 
+
+
+def login_required(view_func):
+    """Compatibility auth decorator for legacy routes.
+
+    Defined early so merged/legacy endpoints that still use @login_required
+    cannot fail at import time.
+    """
+    @wraps(view_func)
+    def _wrapped(*args, **kwargs):
+        if not session.get("username"):
+            return redirect(url_for("login"))
+        return view_func(*args, **kwargs)
+    return _wrapped
+
 geonames = geonamescache.GeonamesCache()
 CITIES = geonames.get_cities()                    
 US_STATES_DICT = geonames.get_us_states()         
@@ -4143,15 +4158,6 @@ def _require_user_id_or_redirect():
     if uid < 0:
         return redirect(url_for("login"))
     return uid
-
-def login_required(view_func):
-    @wraps(view_func)
-    def _wrapped(*args, **kwargs):
-        uid_or_resp = _require_user_id_or_redirect()
-        if isinstance(uid_or_resp, int):
-            return view_func(*args, **kwargs)
-        return uid_or_resp
-    return _wrapped
 
 
 def _require_user_id_or_abort() -> int:
