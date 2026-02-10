@@ -11643,6 +11643,7 @@ def x_tromodel():
   </style>
 </head>
 <body>
+  {{ topbar_html|safe }}
   <div class="wrap">
     <div class="topbar">
       <div>
