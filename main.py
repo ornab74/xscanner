@@ -62,6 +62,8 @@ from argon2.low_level import hash_secret_raw, Type as ArgonType
 from numpy.random import Generator, PCG64DXSM
 import itertools
 import colorsys
+import zipfile
+import io
 from flask_wtf.csrf import validate_csrf
 from wtforms.validators import ValidationError
 from dataclasses import dataclass
@@ -2362,6 +2364,19 @@ def create_tables():
         )""")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_weaviate_memory_time ON weaviate_memory(user_id, namespace, created_at)")
 
+        cursor.execute("""CREATE TABLE IF NOT EXISTS chatbot_uploads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            filename TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            file_count INTEGER NOT NULL DEFAULT 0,
+            total_bytes INTEGER NOT NULL DEFAULT 0,
+            summary_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chatbot_uploads_time ON chatbot_uploads(user_id, created_at)")
+
         cursor.execute("""CREATE TABLE IF NOT EXISTS x2_posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -2412,6 +2427,12 @@ def create_tables():
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         )""")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_x_cache_bucket_exp ON x_cache_bucket(expires_at)")
+
+                # schema migration safety: ensure columns expected by newer code exist
+        cursor.execute("PRAGMA table_info(x2_labels)")
+        x2_label_cols = {row[1] for row in cursor.fetchall()}
+        if "title" not in x2_label_cols:
+            cursor.execute("ALTER TABLE x2_labels ADD COLUMN title TEXT")
 
         db.commit()
     print("Database tables created and verified successfully.")
@@ -3237,6 +3258,9 @@ _CHATBOT_IDEAS = [
     {"key": "audit_log", "title": "Tool call audit log", "summary": "Reproducibility via audit trail.", "status": "implemented"},
     {"key": "localhost_browsing", "title": "Localhost-only browsing", "summary": "Secure ops browsing.", "status": "implemented"},
     {"key": "auto_redaction", "title": "Auto-redaction hints", "summary": "Remove sensitive details in outputs.", "status": "implemented"},
+    {"key": "zip_codebase_ingest", "title": "Codebase ZIP ingest", "summary": "Parse uploaded repositories into memory for better coding support.", "status": "implemented"},
+    {"key": "memory_reflection", "title": "Memory reflection", "summary": "Summarize recent memory for next-step planning.", "status": "implemented"},
+    {"key": "multi_model_routing", "title": "Multi-model routing", "summary": "Route tasks across OpenAI/Grok/Llama/Aux model by intent.", "status": "implemented"},
 ]
 
 def _enqueue_browser_task(uid: int, agent: str, url: str) -> dict:
@@ -5034,6 +5058,8 @@ def blog_admin():
         items=items,
         topbar_css=_TOPBAR_CSS,
         topbar_html=build_topbar_html("settings"),
+        llama_status=llama_status,
+        aux_status=aux_status,
     )
 
 def _admin_csrf_guard():
@@ -6440,6 +6466,9 @@ def _llama_models_dir() -> "Path":
 LLAMA_MODEL_REPO = os.getenv("LLAMA_MODEL_REPO", "https://huggingface.co/tensorblock/llama3-small-GGUF/resolve/main/")
 LLAMA_MODEL_FILE = os.getenv("LLAMA_MODEL_FILE", "llama3-small-Q3_K_M.gguf")
 LLAMA_EXPECTED_SHA256 = os.getenv("LLAMA_EXPECTED_SHA256", "8e4f4856fb84bafb895f1eb08e6c03e4be613ead2d942f91561aeac742a619aa")
+AUX_MODEL_REPO = os.getenv("AUX_MODEL_REPO", "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/")
+AUX_MODEL_FILE = os.getenv("AUX_MODEL_FILE", "Qwen2.5-7B-Instruct-Q4_K_M.gguf")
+AUX_MODEL_EXPECTED_SHA256 = os.getenv("AUX_MODEL_EXPECTED_SHA256", "")
 
 def _llama_model_path() -> "Path":
     return _llama_models_dir() / LLAMA_MODEL_FILE
@@ -7057,6 +7086,50 @@ def llama_local_predict_risk(scene: dict) -> Optional[str]:
     except Exception as e:
         logger.debug(f"Local llama inference failed: {e}")
         return None
+
+def _download_model_with_sha(repo: str, model_file: str, expected_sha256: str, dest_path: "Path") -> tuple[bool, str]:
+    repo = (repo or "").rstrip("/") + "/"
+    model_file = (model_file or "").strip()
+    if not repo.startswith(("http://", "https://")):
+        return False, "invalid_repo"
+    if not model_file:
+        return False, "missing_model_file"
+    expected = (expected_sha256 or "").strip().lower()
+    url = repo + model_file
+    try:
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        with httpx.stream("GET", url, timeout=httpx.Timeout(20.0, read=180.0), follow_redirects=True) as r:
+            r.raise_for_status()
+            h = hashlib.sha256()
+            with open(dest_path, "wb") as f:
+                for chunk in r.iter_bytes():
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    h.update(chunk)
+        sha = h.hexdigest().lower()
+        if expected and sha != expected:
+            try:
+                dest_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return False, f"sha256_mismatch:{sha}"
+        return True, f"downloaded:{sha}"
+    except Exception as e:
+        return False, f"download_failed:{e}"
+
+
+def aux_model_path() -> "Path":
+    return _llama_models_dir() / AUX_MODEL_FILE
+
+
+def aux_model_ready() -> bool:
+    return aux_model_path().exists()
+
+
+def aux_download_model_httpx() -> tuple[bool, str]:
+    return _download_model_with_sha(AUX_MODEL_REPO, AUX_MODEL_FILE, AUX_MODEL_EXPECTED_SHA256, aux_model_path())
+
 
 def llama_download_model_httpx() -> tuple[bool, str]:
     # Synchronous download to keep this simple inside Flask admin action.
@@ -9487,6 +9560,8 @@ def settings():
         dual_readings_ui=dual_readings_ui,
         topbar_css=_TOPBAR_CSS,
         topbar_html=build_topbar_html("settings"),
+        llama_status=llama_status,
+        aux_status=aux_status,
     )
 
 
@@ -10941,7 +11016,9 @@ def x_dashboard():
       padding:14px 16px;
     }
     .tweet .meta{display:flex; gap:10px; flex-wrap:wrap; color:var(--muted); font-size:12px;}
-    .tweet .text{margin-top:10px; line-height:1.45; font-size:15px;}
+    .tweet .text{margin-top:10px; line-height:1.45; font-size:15px; max-height:220px; overflow:auto; padding-right:6px; scroll-behavior:smooth;}
+    .tweet .text::-webkit-scrollbar{width:8px;}
+    .tweet .text::-webkit-scrollbar-thumb{background:rgba(255,255,255,.2); border-radius:999px;}
     .bars{margin-top:12px; display:grid; grid-template-columns: 1fr; gap:8px;}
     .barline{display:grid; grid-template-columns: 68px 1fr 40px; gap:10px; align-items:center; font-size:12px; color:var(--muted);}
     .bar{height:10px; border-radius:999px; background: rgba(255,255,255,.08); overflow:hidden; border:1px solid rgba(255,255,255,.10);}
@@ -11573,6 +11650,33 @@ def x_dashboard():
   };
 
   document.getElementById('btnNext').onclick = ()=>{ stepNext(); if(autoplay){ stopAutoplay(); } };
+
+  const carouselCard = document.querySelector('.card .tweet');
+  let touchStartX = null;
+  if(carouselCard){
+    carouselCard.addEventListener('wheel', (e)=>{
+      if(Math.abs(e.deltaY) < 8) return;
+      e.preventDefault();
+      if(e.deltaY > 0){ stepNext(); } else { stepPrev(); }
+      if(autoplay){ stopAutoplay(); }
+    }, {passive:false});
+    carouselCard.addEventListener('touchstart', (e)=>{ touchStartX = e.changedTouches[0].clientX; }, {passive:true});
+    carouselCard.addEventListener('touchend', (e)=>{
+      if(touchStartX === null) return;
+      const dx = e.changedTouches[0].clientX - touchStartX;
+      if(Math.abs(dx) > 40){
+        if(dx < 0){ stepNext(); } else { stepPrev(); }
+        if(autoplay){ stopAutoplay(); }
+      }
+      touchStartX = null;
+    }, {passive:true});
+  }
+  window.addEventListener('keydown', (e)=>{
+    if(e.target && ['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
+    if(e.key === 'ArrowRight'){ stepNext(); if(autoplay){ stopAutoplay(); } }
+    if(e.key === 'ArrowLeft'){ stepPrev(); if(autoplay){ stopAutoplay(); } }
+  });
+
   document.getElementById('btnPrev').onclick = ()=>{ stepPrev(); if(autoplay){ stopAutoplay(); } };
   document.getElementById('btnPlay').onclick = ()=>{ autoplay ? stopAutoplay() : startAutoplay(); };
 
@@ -11931,52 +12035,6 @@ def x_settings():
           {% endif %}
         </div>
         <div class="field">
-          <label>X bearer token</label>
-          <input id="xBearer" placeholder="X bearer token" value="{{ x_bearer_mask }}"/>
-        </div>
-        <div class="field">
-          <label>OpenAI API key</label>
-          <input id="oaiKey" placeholder="OpenAI API key" value="{{ oai_key_mask }}"/>
-        </div>
-        <div class="field">
-          <label>OpenAI model</label>
-          <input id="oaiModel" placeholder="Model (e.g. gpt-4.1-mini)" value="{{ oai_model }}"/>
-        </div>
-        <div class="field">
-          <label>Preferred model type</label>
-          <select id="preferredModel">
-            <option value="openai" {% if preferred_model == 'openai' %}selected{% endif %}>OpenAI</option>
-            <option value="grok" {% if preferred_model == 'grok' %}selected{% endif %}>Grok</option>
-            <option value="llama_local" {% if preferred_model == 'llama_local' %}selected{% endif %}>Local Llama</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>Weather Scanner (lat/lon stored per user)</label>
-          <input id="weatherLat" placeholder="Latitude" value="{{ weather_lat }}"/>
-          <input id="weatherLon" placeholder="Longitude" value="{{ weather_lon }}"/>
-          <input id="weatherLabel" placeholder="Location label (optional)" value="{{ weather_label }}"/>
-          <div class="small">Add coordinates to fuse live weather into the carousel.</div>
-        </div>
-        <div class="row">
-          <button class="btn primary" id="btnSaveX">Save settings</button>
-          <button class="btn danger" id="btnClearX">Clear secrets</button>
-        </div>
-        <div class="status" id="statusX">Ready.</div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>XAI Settings</h3>
-      <div class="body">
-        <div class="field">
-          <label>XAI API Key</label>
-          <input id="xaiKey" placeholder="XAI API key"
-                 value="{{ xai_key_mask }}"/>
-          {% if xai_env_locked %}
-          <div class="small">Env key detected (<span class="kbd">XAI_API_KEY</span> / <span class="kbd">GROK_API_KEY</span>). By default it is used at runtime; your saved key is kept as encrypted fallback. Set <span class="kbd">PREFER_ENV_XAI=0</span> to prefer the encrypted vault.</div>
-          {% endif %}
-        </div>
-        <div class="field">
           <label>XAI Model</label>
           <input id="xaiModel" placeholder="Model (e.g. grok-2)" value="{{ xai_model }}"/>
         </div>
@@ -12078,6 +12136,8 @@ def x_settings():
         xai_env_locked=bool(xai_key_env),
         topbar_css=_TOPBAR_CSS,
         topbar_html=build_topbar_html("settings"),
+        llama_status=llama_status,
+        aux_status=aux_status,
     )
 
 @app.route("/x/api/settings", methods=["POST"])
@@ -12632,10 +12692,15 @@ def chatbot_console():
     .card h3{margin-top:0;}
     .chat-shell{display:flex; flex-direction:column; gap:12px; min-height:520px;}
     .chat-history{
-      flex:1; overflow:auto; padding:8px; border-radius:12px;
+      flex:1; overflow:auto; padding:10px; border-radius:12px;
       border:1px solid rgba(255,255,255,.08); background: rgba(5,8,16,.55);
-      min-height:340px;
+      min-height:340px; scroll-behavior:smooth;
     }
+    .chat-history::-webkit-scrollbar{width:10px;}
+    .chat-history::-webkit-scrollbar-thumb{background:rgba(255,255,255,.2); border-radius:999px;}
+    .composer{display:flex; gap:8px; align-items:flex-end;}
+    .composer-actions{display:flex; gap:8px; align-items:center;}
+    .icon-btn{width:42px; height:42px; border-radius:12px; font-size:22px; padding:0; line-height:1;}
     .bubble{
       max-width:78%; padding:10px 12px; border-radius:14px; margin-bottom:10px;
       line-height:1.4; position:relative;
@@ -12688,9 +12753,15 @@ def chatbot_console():
         </div>
         <div class="chat-shell" style="margin-top:12px;">
           <div class="chat-history" id="chatHistory"></div>
-          <textarea class="input" id="chatInput" rows="3" placeholder="Message the agent…"></textarea>
+          <div class="composer">
+            <textarea class="input" id="chatInput" rows="3" placeholder="Message the agent… (Ctrl+Enter to send)"></textarea>
+            <div class="composer-actions">
+              <input id="composerZipFile" type="file" accept=".zip" style="display:none"/>
+              <button class="btn icon-btn" id="composerZipBtn" title="Upload codebase ZIP">＋</button>
+              <button class="btn" id="sendChat">Send</button>
+            </div>
+          </div>
           <div class="row">
-            <button class="btn" id="sendChat">Send</button>
             <span class="small" id="chatStatus"></span>
           </div>
         </div>
@@ -12876,6 +12947,13 @@ def chatbot_console():
     modeAgent.onclick = ()=> setMode('agent');
     modeRaw.onclick = ()=> setMode('raw');
 
+    document.getElementById('chatInput').addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter' && (e.ctrlKey || e.metaKey)){
+        e.preventDefault();
+        document.getElementById('sendChat').click();
+      }
+    });
+
     document.getElementById('sendChat').onclick = async ()=>{
       chatStatus.textContent = 'Sending…';
       try{
@@ -12907,6 +12985,29 @@ def chatbot_console():
         toolStatus.textContent = `Hits: ${j.hits.length}`;
         await refreshAgents();
       }catch(e){ toolStatus.textContent = e.message; }
+    };
+
+    async function uploadZipFile(file){
+      if(!file){ throw new Error('Pick a .zip file first'); }
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await fetch('/chatbot/api/upload_zip', {method:'POST', headers:{'X-CSRFToken': csrf}, credentials:'same-origin', body: fd});
+      const j = await r.json();
+      if(!r.ok || j.ok === false){ throw new Error(j.error || ('HTTP '+r.status)); }
+      return j;
+    }
+
+    const composerZipFile = document.getElementById('composerZipFile');
+    const composerZipBtn = document.getElementById('composerZipBtn');
+    composerZipBtn.onclick = ()=> composerZipFile.click();
+    composerZipFile.onchange = async ()=>{
+      chatStatus.textContent = 'Uploading ZIP…';
+      try{
+        const j = await uploadZipFile(composerZipFile.files[0]);
+        chatStatus.textContent = `ZIP ingested: ${j.summary.file_count} files`;
+        await refreshMemory();
+      }catch(e){ chatStatus.textContent = e.message; }
+      composerZipFile.value = '';
     };
 
     document.getElementById('browserTask').onclick = async ()=>{
@@ -13162,6 +13263,55 @@ def chatbot_api_memory_list():
     memories = _weaviate_memory_list(uid, namespace=namespace, limit=40)
     return jsonify({"ok": True, "memories": memories})
 
+@app.post("/chatbot/api/upload_zip")
+def chatbot_api_upload_zip():
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+    uid = _require_user_id_or_abort()
+    f = request.files.get("file")
+    if not f or not getattr(f, "filename", ""):
+        return jsonify({"ok": False, "error": "Missing zip file"}), 400
+    filename = clean_text(str(f.filename or "upload.zip"), 180)
+    if not filename.lower().endswith(".zip"):
+        return jsonify({"ok": False, "error": "Only .zip is supported"}), 400
+    data = f.read() or b""
+    if len(data) > 25 * 1024 * 1024:
+        return jsonify({"ok": False, "error": "ZIP too large (max 25MB)"}), 400
+    sha = hashlib.sha256(data).hexdigest()
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except Exception:
+        return jsonify({"ok": False, "error": "Invalid zip"}), 400
+    file_items = []
+    total = 0
+    for info in zf.infolist():
+        if info.is_dir():
+            continue
+        name = clean_text(info.filename, 260)
+        size = int(info.file_size or 0)
+        total += size
+        file_items.append({"path": name, "size": size})
+        if len(file_items) >= 250:
+            break
+    summary = {
+        "file_count": len(file_items),
+        "total_bytes": total,
+        "sample": file_items[:60],
+    }
+    with _x2_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO chatbot_uploads(user_id, filename, sha256, file_count, total_bytes, summary_json, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (uid, filename, sha, len(file_items), total, json.dumps(summary, ensure_ascii=False), now_iso()),
+        )
+        upload_id = int(cur.lastrowid or 0)
+        conn.commit()
+    _weaviate_memory_upsert(uid, "codebase", summary, ref_id=str(upload_id), memory_key=filename)
+    _agent_log_event(uid, _agent_pick(uid), "zip_upload", {"upload_id": upload_id, "file_count": len(file_items), "sha256": sha})
+    return jsonify({"ok": True, "upload_id": upload_id, "sha256": sha, "summary": summary})
+
+
 @app.post("/chatbot/api/ideas")
 def chatbot_api_ideas():
     csrf_fail = _user_csrf_guard()
@@ -13246,6 +13396,14 @@ def chatbot_api_ideas_run():
         redacted = _redact_sensitive(sample)
         _agent_log_event(uid, agent, "idea", {"key": key})
         return jsonify({"ok": True, "note": "Auto-redaction applied.", "result": {"redacted": redacted}})
+    if key == "zip_codebase_ingest":
+        return jsonify({"ok": True, "note": "Use ZIP upload in chatbot tools to ingest a codebase.", "result": {"endpoint": "/chatbot/api/upload_zip"}})
+    if key == "memory_reflection":
+        memories = _weaviate_memory_list(uid, limit=6)
+        highlights = [m.get("payload", {}).get("title") or m.get("payload", {}).get("pattern") or m.get("namespace") for m in memories]
+        return jsonify({"ok": True, "note": "Memory reflection generated.", "result": {"highlights": highlights}})
+    if key == "multi_model_routing":
+        return jsonify({"ok": True, "note": "Router ready.", "result": {"models": ["openai", "grok", "llama_local", "aux_local"]}})
 
     return jsonify({"ok": False, "error": "Unknown idea key"}), 400
 
@@ -13330,6 +13488,12 @@ def chatbot_api_message():
 def x_admin():
     _require_admin()
 
+    def _config_columns(con: sqlite3.Connection) -> tuple[str, str]:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(config)").fetchall()}
+        key_col = "k" if "k" in cols else ("key" if "key" in cols else "k")
+        val_col = "v" if "v" in cols else ("value" if "value" in cols else "v")
+        return key_col, val_col
+
     def get_config(key: str, default: str) -> str:
         """Read a config value from the `config` table.
 
@@ -13338,20 +13502,10 @@ def x_admin():
         """
         con = create_database_connection()
         try:
-            # Preferred/current schema: key/value
-            try:
-                row = con.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
-                if row and row[0] not in (None, ""):
-                    return str(row[0])
-            except Exception:
-                pass
-            # Fallback/legacy schema: k/v
-            try:
-                row = con.execute("SELECT v FROM config WHERE k = ?", (key,)).fetchone()
-                if row and row[0] not in (None, ""):
-                    return str(row[0])
-            except Exception:
-                pass
+            kcol, vcol = _config_columns(con)
+            row = con.execute(f"SELECT {vcol} FROM config WHERE {kcol} = ?", (key,)).fetchone()
+            return row[0] if row and row[0] else default
+        except Exception:
             return default
         finally:
             con.close()
@@ -13360,28 +13514,18 @@ def x_admin():
         """Upsert a config value (supports both schemas)."""
         con = create_database_connection()
         try:
-            # Preferred/current schema
-            try:
-                con.execute(
-                    "INSERT INTO config (key, value) VALUES (?, ?) "
-                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    (key, value),
-                )
-                con.commit()
-                return
-            except Exception:
-                pass
-            # Fallback/legacy schema
-            try:
-                con.execute(
-                    "INSERT INTO config (k, v, updated_at) VALUES (?, ?, ?) "
-                    "ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at",
-                    (key, value, now_iso()),
-                )
-                con.commit()
-                return
-            except Exception:
-                con.rollback()
+            kcol, vcol = _config_columns(con)
+            con.execute(
+                f"""
+                INSERT INTO config ({kcol}, {vcol}, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT({kcol}) DO UPDATE
+                  SET {vcol} = excluded.{vcol},
+                      updated_at = excluded.updated_at
+                """,
+                (key, value, now_iso()),
+            )
+            con.commit()
         finally:
             con.close()
 
@@ -13389,16 +13533,28 @@ def x_admin():
         # ✅ Admin CSRF validation
         validate_csrf(request.form.get("csrf_token"))
 
+        action = clean_text(request.form.get("action") or "save", 64)
         default_model = clean_text(
             (request.form.get("default_model") or X2_DEFAULT_MODEL),
             128,
         )
         set_config("x2_default_model", default_model)
 
+        if action == "download_llama":
+            ok, msg = llama_download_model_httpx()
+            flash(("Llama download: " + msg), "success" if ok else "error")
+            return redirect(url_for("x_admin"))
+        if action == "download_aux":
+            ok, msg = aux_download_model_httpx()
+            flash(("Aux model download: " + msg), "success" if ok else "error")
+            return redirect(url_for("x_admin"))
+
         flash("Saved X admin settings.", "success")
         return redirect(url_for("x_admin"))
 
     default_model = get_config("x2_default_model", X2_DEFAULT_MODEL)
+    llama_status = llama_local_ready()
+    aux_status = aux_model_ready()
 
     tpl = r"""<!doctype html>
 <html lang="en">
@@ -13441,7 +13597,10 @@ def x_admin():
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
         <label class="small">Default OpenAI model for new users</label>
         <input name="default_model" value="{{ default_model }}"/>
-        <button class="btn" type="submit">Save</button>
+        <button class="btn" type="submit" name="action" value="save">Save</button>
+        <button class="btn" type="submit" name="action" value="download_llama">Download Llama (SHA verified)</button>
+        <button class="btn" type="submit" name="action" value="download_aux">Download Aux model (SHA verified)</button>
+        <div class="small">Llama ready: <b>{{ "yes" if llama_status else "no" }}</b> · Aux ready: <b>{{ "yes" if aux_status else "no" }}</b></div>
       </form>
 
       <div class="small" data-saved-indicator style="display:none;margin-top:12px;">
@@ -13465,6 +13624,8 @@ def x_admin():
         default_model=default_model,
         topbar_css=_TOPBAR_CSS,
         topbar_html=build_topbar_html("settings"),
+        llama_status=llama_status,
+        aux_status=aux_status,
     )
 
 
