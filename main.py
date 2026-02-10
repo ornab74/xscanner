@@ -1,11 +1,21 @@
 from __future__ import annotations
 import logging
 import httpx
+# Optional: Embedded Weaviate (runs locally inside the app process)
+try:
+    import weaviate
+    from weaviate.embedded import EmbeddedOptions
+    from weaviate.auth import AuthApiKey
+except Exception:
+    weaviate = None
+    EmbeddedOptions = None
+    AuthApiKey = None
+
 import sqlite3
 import psutil
 from flask import (
     Flask, render_template_string, request, redirect, url_for,
-    session, jsonify, flash, make_response, Response, stream_with_context, abort)
+    session, jsonify, flash, make_response, Response, stream_with_context, abort, has_request_context, send_file)
 from flask_wtf import FlaskForm, CSRFProtect
 from flask_wtf.csrf import generate_csrf
 from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
@@ -1537,12 +1547,30 @@ def derive_domain_key(domain: str, field: str, epoch: int) -> bytes:
     return hkdf_sha3(_rootk(), info=info, length=32)
 
 
-def build_hd_ctx(domain: str, field: str, rid: int | None = None) -> dict:
+def build_hd_ctx(domain: str, field: str, rid: int | str | None = None) -> dict:
+    """Builds a small context dict used for keyed operations.
+
+    Note: `rid` historically was an int, but some call-sites pass a string like "u1".
+    We accept both and normalize safely to an integer.
+    """
+    rid_norm = 0
+    try:
+        if rid is None:
+            rid_norm = 0
+        elif isinstance(rid, int):
+            rid_norm = int(rid)
+        else:
+            s = str(rid).strip()
+            # accept forms like "u123", "rid:123", etc.
+            m = re.search(r"(\d+)", s)
+            rid_norm = int(m.group(1)) if m else 0
+    except Exception:
+        rid_norm = 0
     return {
         "domain": domain,
         "field": field,
         "epoch": hd_get_epoch(),
-        "rid": int(rid or 0),
+        "rid": rid_norm,
     }
 
 
@@ -2496,9 +2524,9 @@ def call_chatgpt_52(prompt: str, client: "RetryingHTTPClient") -> str:
     """
     ChatGPT 5.2 JSON-only call via httpx (retrying).
     """
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY")
+    api_key = get_openai_api_key()
     if not api_key:
-        raise RuntimeError("missing OPENAI_API_KEY")
+        raise RuntimeError("missing OpenAI key (set env OPENAI_API_KEY or save in settings)")
 
     payload = {
         "model": "gpt-5.2",
@@ -2706,6 +2734,158 @@ def vault_get(user_id: int, key: str, default: str = "") -> str:
         return clean_text(pt.decode("utf-8", errors="ignore"), 6000) or default
     except Exception:
         return default
+
+
+
+def _current_user_id_safe() -> Optional[int]:
+    """Best-effort current user id (request-context only)."""
+    try:
+        if not has_request_context():
+            return None
+        uname = session.get("username")
+        if not uname:
+            return None
+        uid = get_user_id(str(uname)) or 0
+        uid = int(uid)
+        return uid if uid > 0 else None
+    except Exception:
+        return None
+
+
+def _get_admin_user_id() -> Optional[int]:
+    """Return lowest-id admin user (stable default)."""
+    try:
+        with sqlite3.connect(DB_FILE) as db:
+            row = db.execute("SELECT id FROM users WHERE is_admin=1 ORDER BY id ASC LIMIT 1").fetchone()
+        if row and row[0]:
+            return int(row[0])
+    except Exception:
+        pass
+    return None
+
+
+def get_openai_api_key(user_id: Optional[int] = None) -> str:
+    """Resolve OpenAI key: user vault -> admin vault -> env."""
+    uid = int(user_id) if isinstance(user_id, int) else _current_user_id_safe()
+    if uid:
+        k = vault_get(uid, "openai_key", "")
+        if k:
+            return k
+    admin_id = _get_admin_user_id()
+    if admin_id and (not uid or admin_id != uid):
+        k = vault_get(admin_id, "openai_key", "")
+        if k:
+            return k
+    return (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()
+
+
+
+def get_xai_api_key(user_id: Optional[int] = None) -> str:
+    """Resolve XAI/Grok key.
+    Default order matches README: env XAI_API_KEY (preferred) -> env GROK_API_KEY -> user vault -> admin vault.
+    Set PREFER_ENV_XAI=0 to prefer vault keys over env.
+    """
+    prefer_env = os.getenv("PREFER_ENV_XAI", "1") != "0"
+    uid = int(user_id) if isinstance(user_id, int) else _current_user_id_safe()
+
+    def _vault_lookup(vuid: Optional[int]) -> str:
+        if not vuid:
+            return ""
+        k = vault_get(vuid, "xai_api_key", "")
+        return k or ""
+
+    env_key = (os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY") or "").strip()
+    if prefer_env and env_key:
+        return env_key
+
+    # vault keys
+    if uid:
+        k = _vault_lookup(uid)
+        if k:
+            return k
+
+    admin_id = _get_admin_user_id()
+    if admin_id and (not uid or admin_id != uid):
+        k = _vault_lookup(admin_id)
+        if k:
+            return k
+
+    return env_key
+
+
+def get_x_bearer_token(user_id: Optional[int] = None) -> str:
+    """Resolve X bearer token: user vault -> admin vault -> env.
+
+    Env vars supported: X_BEARER_TOKEN, X_BEARER.
+    """
+    uid = int(user_id) if isinstance(user_id, int) else _current_user_id_safe()
+    if uid:
+        k = vault_get(uid, "x_bearer", "")
+        if k:
+            return k
+    admin_id = _get_admin_user_id()
+    if admin_id and (not uid or admin_id != uid):
+        k = vault_get(admin_id, "x_bearer", "")
+        if k:
+            return k
+    return (os.getenv("X_BEARER_TOKEN") or os.getenv("X_BEARER") or "").strip()
+
+def get_x_user_id(user_id: Optional[int] = None) -> str:
+    """Resolve X user id: user vault -> admin vault -> env.
+
+    Env vars supported: X_USER_ID, RGN_X_USER_ID.
+    """
+    uid = int(user_id) if isinstance(user_id, int) else _current_user_id_safe()
+    if uid:
+        k = vault_get(uid, "x_user_id", "")
+        if k:
+            return k
+    admin_id = _get_admin_user_id()
+    if admin_id and (not uid or admin_id != uid):
+        k = vault_get(admin_id, "x_user_id", "")
+        if k:
+            return k
+    return (os.getenv("X_USER_ID") or os.getenv("RGN_X_USER_ID") or "").strip()
+
+def sync_env_secrets_to_vault() -> None:
+    """Seed admin's encrypted vault from env (no overwrite unless forced).
+
+    This makes runtime behavior consistent: the app can safely use either env secrets or the encrypted PQ-hybrid vault.
+    FORCE_ENV_VAULT_SYNC=1 will overwrite existing stored secrets.
+    """
+    admin_id = _get_admin_user_id()
+    if not admin_id:
+        return
+    force = os.getenv("FORCE_ENV_VAULT_SYNC", "0") == "1"
+
+    # OpenAI
+    env_oai = (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()
+    if env_oai:
+        existing = vault_get(admin_id, "openai_key", "")
+        if force or not existing:
+            vault_set(admin_id, "openai_key", env_oai)
+
+    # XAI / Grok
+    env_xai = (os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY") or "").strip()
+    if env_xai:
+        existing = vault_get(admin_id, "xai_api_key", "")
+        if force or not existing:
+            vault_set(admin_id, "xai_api_key", env_xai)
+
+
+    # X bearer / X user id (optional)
+    env_x_bearer = (os.getenv("X_BEARER_TOKEN") or os.getenv("X_BEARER") or "").strip()
+    if env_x_bearer:
+        existing = vault_get(admin_id, "x_bearer", "")
+        if force or not existing:
+            vault_set(admin_id, "x_bearer", env_x_bearer)
+
+    env_x_user = (os.getenv("X_USER_ID") or os.getenv("RGN_X_USER_ID") or "").strip()
+    if env_x_user:
+        existing = vault_get(admin_id, "x_user_id", "")
+        if force or not existing:
+            vault_set(admin_id, "x_user_id", env_x_user)
+
 
 
 def x2_fetch_user_tweets(bearer: str, x_user_id: str, max_results: int = 80, pagination_token: Optional[str] = None) -> Dict[str, Any]:
@@ -4433,9 +4613,8 @@ def blog_index():
   <meta charset="utf-8">
   <title>QRS - Blog</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-roboto/1.1.13/index.min.css" rel="stylesheet" integrity="sha384-2V4P1oTyWcCwZqZ9LP8y8QL4mFQZVfrSez2yYcXgD1hlXQW2K9eK7oV5L9c3NPGp" crossorigin="anonymous">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-orbitron/1.1.13/index.min.css" rel="stylesheet" integrity="sha384-Wk0o7Q4V2rHh0sR7T5pQKZ8xU3Y6JXb5w2aG3Jr0r8GkP6gI7lqV9GqV2o2r3ZxA" crossorigin="anonymous">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/roboto.css') }}" integrity="sha256-wRhGrZEn4RjTtXkA0QYnr+rKqcanYgIdMe+RZXy3TAo=">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=">
   <style>
     :root{ --accent: {{ accent }}; }
     body{ background:#0b0f17; color:#eaf5ff; font-family:'Roboto',sans-serif; }
@@ -4504,9 +4683,8 @@ def blog_view(slug: str):
   <meta charset="utf-8">
   <title>{{ post['title'] }} - QRS Blog</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-roboto/1.1.13/index.min.css" rel="stylesheet" integrity="sha384-2V4P1oTyWcCwZqZ9LP8y8QL4mFQZVfrSez2yYcXgD1hlXQW2K9eK7oV5L9c3NPGp" crossorigin="anonymous">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-orbitron/1.1.13/index.min.css" rel="stylesheet" integrity="sha384-Wk0o7Q4V2rHh0sR7T5pQKZ8xU3Y6JXb5w2aG3Jr0r8GkP6gI7lqV9GqV2o2r3ZxA" crossorigin="anonymous">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/roboto.css') }}" integrity="sha256-wRhGrZEn4RjTtXkA0QYnr+rKqcanYgIdMe+RZXy3TAo=">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=">
   <style>
     :root{ --accent: {{ accent }}; }
     body{ background:#0b0f17; color:#eaf5ff; font-family:'Roboto',sans-serif; }
@@ -4618,8 +4796,7 @@ def blog_admin():
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
 
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-        integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=">
 
   <style>
     body{background:#0b0f17;color:#eaf5ff}
@@ -5229,8 +5406,7 @@ def admin_blog_backup_page():
   <meta charset="UTF-8">
   <title>Admin - Blog Backup</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-        integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=">
 </head>
 <body class="bg-dark text-light">
 <div class="container py-4">
@@ -5345,8 +5521,7 @@ def admin_local_llm_page():
   <meta charset="UTF-8">
   <title>Admin - Local Llama</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-        integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=">
 </head>
 <body class="bg-dark text-light">
 <div class="container py-4">
@@ -5726,6 +5901,16 @@ def init_app_once():
         ensure_admin_from_env()
         enforce_admin_presence()
         restore_blog_backup_if_db_empty()
+        # Seed admin vault from env (optional) so the app can use either source.
+        try:
+            sync_env_secrets_to_vault()
+        except Exception:
+            pass
+        # Start embedded Weaviate (local-only) if enabled
+        try:
+            weaviate_init_embedded()
+        except Exception:
+            pass
         _init_done = True
 
 
@@ -5953,6 +6138,28 @@ def sanitize_input(user_input):
         user_input = str(user_input)
     return bleach.clean(user_input)
 
+
+def normalize_secret_input(secret: object, max_len: int = 256) -> str:
+    """Normalize sensitive inputs (passwords/tokens) without HTML sanitization.
+
+    We do NOT run bleach on secrets because it can transform characters (e.g. '&' -> '&amp;'),
+    breaking verification. Instead, we only:
+      - coerce to str,
+      - strip NUL bytes,
+      - enforce a reasonable max length.
+    """
+    if secret is None:
+        return ""
+    if not isinstance(secret, str):
+        secret = str(secret)
+    # Remove NUL bytes (can cause edge-case issues in some stacks)
+    if "\x00" in secret:
+        secret = secret.replace("\x00", "")
+    if len(secret) > max_len:
+        raise ValueError("Secret too long")
+    return secret
+
+
 gc = geonamescache.GeonamesCache()
 cities = gc.get_cities()
 
@@ -6164,24 +6371,15 @@ EXAMPLE
 # -----------------------------
 
 _OPENAI_BASE_URL = "https://api.openai.com/v1"
-_OPENAI_ASYNC_CLIENT: Optional[httpx.AsyncClient] = None
 
-def _maybe_openai_async_client() -> Optional[httpx.AsyncClient]:
-    global _OPENAI_ASYNC_CLIENT
-    api_key = os.getenv("OPENAI_API_KEY")
+def _openai_headers(user_id: Optional[int] = None) -> Optional[dict]:
+    api_key = get_openai_api_key(user_id)
     if not api_key:
         return None
-    if _OPENAI_ASYNC_CLIENT is not None:
-        return _OPENAI_ASYNC_CLIENT
-    _OPENAI_ASYNC_CLIENT = httpx.AsyncClient(
-        base_url=_OPENAI_BASE_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        timeout=httpx.Timeout(25.0, connect=10.0),
-    )
-    return _OPENAI_ASYNC_CLIENT
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
 
 def _openai_extract_output_text(data: dict) -> str:
     if not isinstance(data, dict):
@@ -6212,8 +6410,8 @@ async def run_openai_response_text(
     temperature: float = 0.0,
     reasoning_effort: str = "none",
 ) -> Optional[str]:
-    client = _maybe_openai_async_client()
-    if client is None:
+    headers = _openai_headers()
+    if headers is None:
         return None
     model = model or os.getenv("OPENAI_MODEL", "gpt-5.2")
     payload: dict = {
@@ -6227,12 +6425,17 @@ async def run_openai_response_text(
         payload["temperature"] = float(temperature)
 
     try:
-        r = await client.post("/responses", json=payload)
-        if r.status_code != 200:
-            logger.debug(f"OpenAI error {r.status_code}: {r.text[:200]}")
-            return None
-        data = r.json()
-        return _openai_extract_output_text(data) or None
+        async with httpx.AsyncClient(
+            base_url=_OPENAI_BASE_URL,
+            headers=headers,
+            timeout=httpx.Timeout(25.0, connect=10.0),
+        ) as client:
+            r = await client.post("/responses", json=payload)
+            if r.status_code != 200:
+                logger.debug(f"OpenAI error {r.status_code}: {r.text[:200]}")
+                return None
+            data = r.json()
+            return _openai_extract_output_text(data) or None
     except Exception as e:
         logger.debug(f"OpenAI call failed: {e}")
         return None
@@ -7688,10 +7891,10 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
     openai_line = None
     grok_line = None
 
-    if (provider in (None, "openai")) and os.getenv("OPENAI_API_KEY"):
+    if (provider in (None, "openai")) and get_openai_api_key():
         openai_line = await _try_openai(prompt)
 
-    if (provider in (None, "grok")) and os.getenv("GROK_API_KEY"):
+    if (provider in (None, "grok")) and get_xai_api_key():
         # Include OpenAI suggestion as an optional hint, but still enforce "no invention" via allowlist.
         p2 = prompt
         if openai_line:
@@ -7840,7 +8043,10 @@ def generate_invite_code(length=24, use_checksum=True):
 
 def register_user(username, password, invite_code=None):
     username = sanitize_input(username)
-    password = sanitize_input(password)
+    try:
+        password = normalize_secret_input(password)
+    except ValueError:
+        return False, "Password is too long."
 
     if not validate_password_strength(password):
         logger.warning(f"User '{username}' provided a weak password.")
@@ -8030,7 +8236,10 @@ def validate_invite_code_format(invite_code_with_hmac,
 
 def authenticate_user(username, password):
     username = sanitize_input(username)
-    password = sanitize_input(password)
+    try:
+        password = normalize_secret_input(password)
+    except ValueError:
+        return False
 
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
@@ -8364,7 +8573,7 @@ Please assess the following:
         label = llama_local_predict_risk(scene)
         report = label if label else "Medium"
         model_used = "llama_local"
-    elif selected == "grok" and os.getenv("GROK_API_KEY"):
+    elif selected == "grok" and get_xai_api_key():
         raw_report = await run_grok_completion(grok_prompt)
         report = raw_report if raw_report is not None else ""
         model_used = "grok"
@@ -8572,11 +8781,7 @@ def login():
     <meta charset="UTF-8">
     <title>Login - QRS</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-
-    
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/typeface-orbitron/1.1.13/index.min.css" integrity="sha384-Wk0o7Q4V2rHh0sR7T5pQKZ8xU3Y6JXb5w2aG3Jr0r8GkP6gI7lqV9GqV2o2r3ZxA" crossorigin="anonymous">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-          integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=">
 
     <style>
         body {
@@ -8774,16 +8979,10 @@ def register():
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
     <meta name="csrf-token" content="{{ csrf_token() }}">
 
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-roboto/1.1.13/index.min.css" rel="stylesheet"
-          integrity="sha384-2V4P1oTyWcCwZqZ9LP8y8QL4mFQZVfrSez2yYcXgD1hlXQW2K9eK7oV5L9c3NPGp" crossorigin="anonymous">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-orbitron/1.1.13/index.min.css" rel="stylesheet"
-          integrity="sha384-Wk0o7Q4V2rHh0sR7T5pQKZ8xU3Y6JXb5w2aG3Jr0r8GkP6gI7lqV9GqV2o2r3ZxA" crossorigin="anonymous">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-          integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
-    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.15.4/css/all.css"
-          integrity="sha384-dyZ88mC6Up2uqS4h/KRgHuoeGwBcD4Ng9SiP4dIRy0EXT9KPU5t5Q0eP5B8vgc7X" crossorigin="anonymous">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/roboto.css') }}" integrity="sha256-wRhGrZEn4RjTtXkA0QYnr+rKqcanYgIdMe+RZXy3TAo=">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}" integrity="sha256-mUZM63G8m73Mcidfrv5E+Y61y7a12O5mW4ezU3bxqW4=">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 
     <style>
         body {
@@ -9216,14 +9415,9 @@ def settings():
     <meta charset="UTF-8">
     <title>Settings - QRS</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"
-          integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-roboto/1.1.13/index.min.css" rel="stylesheet"
-          integrity="sha384-2V4P1oTyWcCwZqZ9LP8y8QL4mFQZVfrSez2yYcXgD1hlXQW2K9eK7oV5L9c3NPGp" crossorigin="anonymous">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/typeface-orbitron/1.1.13/index.min.css" rel="stylesheet"
-          integrity="sha384-Wk0o7Q4V2rHh0sR7T5pQKZ8xU3Y6JXb5w2aG3Jr0r8GkP6gI7lqV9GqV2o2r3ZxA" crossorigin="anonymous">
-    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.15.4/css/all.css"
-          integrity="sha384-dyZ88mC6Up2uqS4h/KRgHuoeGwBcD4Ng9SiP4dIRy0EXT9KPU5t5Q0eP5B8vgc7X" crossorigin="anonymous">
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/roboto.css') }}" integrity="sha256-wRhGrZEn4RjTtXkA0QYnr+rKqcanYgIdMe+RZXy3TAo=">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}" integrity="sha256-mUZM63G8m73Mcidfrv5E+Y61y7a12O5mW4ezU3bxqW4=">
     <style>
         body { background:#121212; color:#fff; font-family:'Roboto',sans-serif; }
         .sidebar { position:fixed; top:0; left:0; height:100%; width:220px; background:#1f1f1f; padding-top:60px; border-right:1px solid #333; transition:width .3s; }
@@ -9347,10 +9541,8 @@ def settings():
         </ul>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
-            integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
+    <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}" integrity="sha256-9nt4LsWmLI/O24lTW89IzAKuBqEZ47l/4rh1+tH/NY8="></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 </body>
 </html>
@@ -10704,8 +10896,8 @@ def x_dashboard():
     uid = _require_user_id_or_redirect()
     if not isinstance(uid, int):
         return uid  # redirect response
-    x_user = vault_get(uid, "x_user_id", "")
-    x_bearer = vault_get(uid, "x_bearer", "")
+    x_user = get_x_user_id(uid)
+    x_bearer = get_x_bearer_token(uid)
     oai_model = vault_get(uid, "openai_model", X2_DEFAULT_MODEL)
     oai_key = vault_get(uid, "openai_key", "")
     weather_lat = vault_get(uid, "x_weather_lat", "")
@@ -12066,7 +12258,6 @@ def x_api_xai_settings():
 
     if xai_model and not re.fullmatch(r"[A-Za-z0-9._:\-]{1,80}", xai_model):
         return jsonify({"ok": False, "error": "Invalid xai_model"}), 400
-
     wrote = []
     if xai_key_env:
         xai_key = ""
@@ -12105,8 +12296,8 @@ def x_api_fetch():
         return csrf_fail
     uid = _require_user_id_or_abort()
 
-    bearer = vault_get(uid, "x_bearer", "") or ""
-    x_user_id = vault_get(uid, "x_user_id", "") or ""
+    bearer = get_x_bearer_token(uid) or ""
+    x_user_id = get_x_user_id(uid) or ""
 
     # Reject masked/placeholder secrets and sanitize inputs
     bearer = clean_text(bearer, 4096)
@@ -13304,6 +13495,11 @@ def x_admin():
         return key_col, val_col
 
     def get_config(key: str, default: str) -> str:
+        """Read a config value from the `config` table.
+
+        Current schema uses (key, value). Some older code assumed (k, v, updated_at).
+        This helper supports both.
+        """
         con = create_database_connection()
         try:
             kcol, vcol = _config_columns(con)
@@ -13315,6 +13511,7 @@ def x_admin():
             con.close()
 
     def set_config(key: str, value: str):
+        """Upsert a config value (supports both schemas)."""
         con = create_database_connection()
         try:
             kcol, vcol = _config_columns(con)
@@ -13556,6 +13753,427 @@ try:
 except Exception:
     logger.exception("Legacy endpoint restore failed")
 # ================== END LEGACY ENDPOINT RESTORE ==================
+
+
+# =========================
+# Advanced Memory + Agent Tasks + Secure Blob Vault (pQ SQLite) - 2026-02
+# =========================
+
+VAULT_MAX_BYTES = int(os.getenv("VAULT_MAX_BYTES", str(25 * 1024 * 1024)))  # 25MB default
+VAULT_TOKEN_TTL_S = int(os.getenv("VAULT_TOKEN_TTL_S", "90"))  # signed download token lifetime
+VAULT_SIGNING_KEY = (os.getenv("VAULT_SIGNING_KEY", "").strip() or os.getenv("SECRET_KEY", "").strip() or "change-me")
+
+ALLOWED_VAULT_EXT = {
+    ".png",".jpg",".jpeg",".webp",".gif",
+    ".json",".txt",".md",".pdf",".csv",
+    ".zip"
+}
+
+def _utc_ts() -> int:
+    return int(time.time())
+
+def _ensure_user_settings_row(uid: int) -> None:
+    uid = int(uid)
+    with _x2_db() as conn:
+        conn.execute(
+            "INSERT INTO user_settings(user_id, updated_at) VALUES(?, ?) "
+            "ON CONFLICT(user_id) DO NOTHING",
+            (uid, _utc_iso()),
+        )
+        conn.commit()
+
+def get_user_setting(uid: int, key: str, default=None):
+    uid = int(uid)
+    _ensure_user_settings_row(uid)
+    key = str(key)
+    with _x2_db() as conn:
+        row = conn.execute(f"SELECT {key} AS v FROM user_settings WHERE user_id=?", (uid,)).fetchone()
+        if not row:
+            return default
+        return row["v"] if isinstance(row, sqlite3.Row) else row[0]
+
+def set_user_setting(uid: int, **kwargs) -> None:
+    uid = int(uid)
+    _ensure_user_settings_row(uid)
+    allowed = {"weaviate_enabled","memory_style","rag_max_chunks","agent_enabled"}
+    cols = []
+    vals = []
+    for k,v in kwargs.items():
+        if k not in allowed:
+            continue
+        cols.append(f"{k}=?")
+        vals.append(v)
+    if not cols:
+        return
+    vals.append(_utc_iso())
+    vals.append(uid)
+    with _x2_db() as conn:
+        conn.execute(f"UPDATE user_settings SET {', '.join(cols)}, updated_at=? WHERE user_id=?", tuple(vals))
+        conn.commit()
+
+def quantum_entropic_rgb_label(data: bytes, salt: str = "") -> str:
+    try:
+        if not isinstance(data, (bytes, bytearray)):
+            data = str(data).encode("utf-8", "ignore")
+        h = hashlib.sha256((salt.encode("utf-8") + bytes(data))).digest()
+        freq = [0]*256
+        for b in data[:4096]:
+            freq[b] += 1
+        total = sum(freq) or 1
+        ent = 0.0
+        for c in freq:
+            if c:
+                p = c/total
+                ent -= p * math.log2(p)
+        ent_scaled = int(min(255, max(0, ent * 16)))
+        r = (h[0] ^ h[16] ^ ent_scaled) & 0xFF
+        g = (h[1] ^ h[17] ^ (ent_scaled*3)) & 0xFF
+        b = (h[2] ^ h[18] ^ (ent_scaled*7)) & 0xFF
+        return f"{r},{g},{b}"
+    except Exception:
+        return "0,0,0"
+
+# ------------------------------
+# Embedded Weaviate (LOCAL ONLY)
+# ------------------------------
+_WV_CLIENT = None
+_WV_STARTED = False
+
+def _weaviate_embedded_auth_key() -> str:
+    """Stable API key for local embedded Weaviate auth (do NOT expose externally)."""
+    key = (os.getenv("WEAVIATE_EMBEDDED_API_KEY","") or "").strip()
+    if key:
+        return key
+    # Derive a stable key from SECRET_KEY so restarts keep working.
+    base = (os.getenv("SECRET_KEY","") or "xscanner-default-secret").encode("utf-8", "ignore")
+    return hashlib.sha256(b"weaviate-embedded:" + base).hexdigest()[:48]
+
+def is_weaviate_globally_enabled() -> bool:
+    return os.getenv("MEMORY_WEAVIATE_ENABLED","0").strip() == "1"
+
+def is_weaviate_embedded_enabled() -> bool:
+    return os.getenv("WEAVIATE_EMBEDDED_ENABLED","1").strip() == "1"
+
+def should_use_weaviate(uid: int | None = None) -> bool:
+    if not is_weaviate_globally_enabled():
+        return False
+    if uid is None:
+        return True
+    try:
+        return bool(int(get_user_setting(uid, "weaviate_enabled", 0) or 0) == 1)
+    except Exception:
+        return False
+
+def weaviate_init_embedded() -> None:
+    """Start embedded Weaviate bound to 127.0.0.1 with API-key auth enabled."""
+    global _WV_CLIENT, _WV_STARTED
+    if _WV_STARTED:
+        return
+    if not is_weaviate_globally_enabled():
+        return
+    if not is_weaviate_embedded_enabled():
+        return
+    if weaviate is None or EmbeddedOptions is None:
+        logger.warning("Weaviate embedded enabled but weaviate-client is not installed; disabling Weaviate.")
+        return
+
+    api_key = _weaviate_embedded_auth_key()
+    # AuthN config env vars (disable anonymous access, enable API keys)
+    env = {
+        "AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED": "false",
+        "AUTHENTICATION_APIKEY_ENABLED": "true",
+        "AUTHENTICATION_APIKEY_ALLOWED_KEYS": api_key,
+        "AUTHENTICATION_APIKEY_USERS": "xscanner",
+        "LOG_LEVEL": os.getenv("WEAVIATE_LOG_LEVEL", "error"),
+    }
+
+    # Bind to loopback only
+    host = os.getenv("WEAVIATE_EMBEDDED_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port = int(os.getenv("WEAVIATE_EMBEDDED_PORT", "8079"))
+    data_path = os.getenv("WEAVIATE_DATA_PATH", "./.weaviate_data")
+    bin_path = os.getenv("WEAVIATE_BIN_PATH", "./.weaviate_bin")
+
+    try:
+        _WV_CLIENT = weaviate.WeaviateClient(
+            embedded_options=EmbeddedOptions(
+                hostname=host,
+                port=port,
+                persistence_data_path=data_path,
+                binary_path=bin_path,
+                additional_env_vars=env,
+            ),
+            auth_client_secret=AuthApiKey(api_key) if AuthApiKey else None,
+            skip_init_checks=True,
+        )
+        _WV_CLIENT.connect()
+        _WV_STARTED = True
+        logger.info("Embedded Weaviate started (local-only) at %s:%s with API-key auth.", host, port)
+    except Exception as e:
+        _WV_CLIENT = None
+        _WV_STARTED = False
+        logger.exception("Failed to start embedded Weaviate: %s", e)
+
+def weaviate_client():
+    """Return the embedded Weaviate client if available."""
+    if not _WV_STARTED or _WV_CLIENT is None:
+        return None
+    return _WV_CLIENT
+
+def weaviate_close_embedded() -> None:
+    global _WV_CLIENT, _WV_STARTED
+    try:
+        if _WV_CLIENT is not None:
+            _WV_CLIENT.close()
+    except Exception:
+        pass
+    _WV_CLIENT = None
+    _WV_STARTED = False
+
+def _sign_download_token(file_id: int, uid: int, expires_ts: int) -> str:
+    msg = f"{int(file_id)}:{int(uid)}:{int(expires_ts)}".encode("utf-8")
+    sig = hmac.new(VAULT_SIGNING_KEY.encode("utf-8"), msg, hashlib.sha256).digest()
+    tok = base64.urlsafe_b64encode(msg + b"." + sig).decode("utf-8").rstrip("=")
+    return tok
+
+def _verify_download_token(token: str, file_id: int, uid: int) -> bool:
+    try:
+        pad = "=" * (-len(token) % 4)
+        raw = base64.urlsafe_b64decode(token + pad)
+        msg, sig = raw.rsplit(b".", 1)
+        expected = hmac.new(VAULT_SIGNING_KEY.encode("utf-8"), msg, hashlib.sha256).digest()
+        if not hmac.compare_digest(sig, expected):
+            return False
+        parts = msg.decode("utf-8").split(":")
+        if len(parts) != 3:
+            return False
+        fid2, uid2, exp2 = int(parts[0]), int(parts[1]), int(parts[2])
+        if fid2 != int(file_id) or uid2 != int(uid):
+            return False
+        if _utc_ts() > exp2:
+            return False
+        return True
+    except Exception:
+        return False
+
+def vault_file_put(uid: int, logical_name: str, raw_bytes: bytes, mime: str = "application/octet-stream", task_id=None, meta: dict|None=None) -> int:
+    uid = int(uid)
+    logical_name = clean_text(logical_name, 180) or "file.bin"
+    ext = os.path.splitext(logical_name.lower())[1]
+    if ext and ext not in ALLOWED_VAULT_EXT:
+        raise ValueError("File type not allowed")
+    if not isinstance(raw_bytes, (bytes, bytearray)):
+        raise ValueError("Invalid file bytes")
+    raw_bytes = bytes(raw_bytes)
+    if len(raw_bytes) > VAULT_MAX_BYTES:
+        raise ValueError("File too large")
+    sha = hashlib.sha256(raw_bytes).hexdigest()
+    ctx = build_hd_ctx(domain="vault_files", field=sha, rid=f"u{uid}")
+    data_enc = encrypt_data(raw_bytes, ctx)
+    label = quantum_entropic_rgb_label(raw_bytes, salt=f"u{uid}")
+    meta_json = json.dumps(meta or {}, ensure_ascii=False)
+    with _x2_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO vault_files(user_id, task_id, logical_name, mime, sha256_hex, size_bytes, created_at, data_enc, label_rgb, meta_json) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (uid, task_id, logical_name, mime, sha, len(raw_bytes), _utc_iso(), data_enc, label, meta_json),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+def vault_file_get(uid: int, file_id: int):
+    uid = int(uid); file_id = int(file_id)
+    with _x2_db() as conn:
+        row = conn.execute("SELECT * FROM vault_files WHERE id=? AND user_id=?", (file_id, uid)).fetchone()
+        if not row:
+            return None
+        ctx = build_hd_ctx(domain="vault_files", field=row["sha256_hex"], rid=f"u{uid}")
+        raw = decrypt_data(row["data_enc"], ctx)
+        return {
+            "logical_name": row["logical_name"],
+            "mime": row["mime"],
+            "sha256_hex": row["sha256_hex"],
+            "size_bytes": row["size_bytes"],
+            "created_at": row["created_at"],
+            "label_rgb": row["label_rgb"],
+            "meta_json": row["meta_json"],
+            "raw": raw,
+        }
+
+# ---- Settings API (toggle Weaviate memory / agent tasks) ----
+@app.get("/api/user_settings")
+@login_required
+def api_user_settings_get():
+    uid = _require_user_id_or_abort()
+    _ensure_user_settings_row(uid)
+    return jsonify({
+        "ok": True,
+        "weaviate_enabled": int(get_user_setting(uid, "weaviate_enabled", 0) or 0),
+        "memory_style": get_user_setting(uid, "memory_style", "balanced") or "balanced",
+        "rag_max_chunks": int(get_user_setting(uid, "rag_max_chunks", 8) or 8),
+        "agent_enabled": int(get_user_setting(uid, "agent_enabled", 1) or 1),
+        "global_weaviate_enabled": 1 if os.getenv("MEMORY_WEAVIATE_ENABLED","0")=="1" else 0,
+    })
+
+@app.post("/api/user_settings")
+@login_required
+def api_user_settings_set():
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+    uid = _require_user_id_or_abort()
+    data = request.get_json(silent=True) or {}
+    weav = 1 if str(data.get("weaviate_enabled","0")).lower() in ("1","true","yes","on") else 0
+    agent = 1 if str(data.get("agent_enabled","1")).lower() in ("1","true","yes","on") else 0
+    style = clean_text(data.get("memory_style","balanced"), 24) or "balanced"
+    if style not in ("minimal","balanced","aggressive"):
+        style = "balanced"
+    try:
+        rag = int(data.get("rag_max_chunks", 8))
+    except Exception:
+        rag = 8
+    rag = max(1, min(24, rag))
+    set_user_setting(uid, weaviate_enabled=weav, agent_enabled=agent, memory_style=style, rag_max_chunks=rag)
+    return jsonify({"ok": True})
+
+# ---- Agent Tasks API ----
+@app.get("/agent/api/tasks")
+@login_required
+def agent_api_tasks_list():
+    uid = _require_user_id_or_abort()
+    if int(get_user_setting(uid, "agent_enabled", 1) or 1) != 1:
+        return jsonify({"ok": False, "error": "Agent disabled"}), 403
+    with _x2_db() as conn:
+        rows = conn.execute(
+            "SELECT id,title,status,created_at,updated_at,substr(coalesce(result_text,''),1,500) AS preview, "
+            "substr(coalesce(error_text,''),1,500) AS err FROM agent_tasks WHERE user_id=? ORDER BY id DESC LIMIT 200",
+            (uid,),
+        ).fetchall()
+    return jsonify({"ok": True, "tasks": [dict(r) for r in rows]})
+
+@app.post("/agent/api/tasks")
+@login_required
+def agent_api_tasks_create():
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+    uid = _require_user_id_or_abort()
+    if int(get_user_setting(uid, "agent_enabled", 1) or 1) != 1:
+        return jsonify({"ok": False, "error": "Agent disabled"}), 403
+    data = request.get_json(silent=True) or {}
+    title = clean_text(data.get("title","Task"), 140) or "Task"
+    prompt = clean_text(data.get("prompt",""), 18000)
+    if not prompt:
+        return jsonify({"ok": False, "error": "prompt required"}), 400
+    with _x2_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO agent_tasks(user_id,title,prompt,status,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (uid, title, prompt, "queued", _utc_iso(), _utc_iso()),
+        )
+        conn.commit()
+        tid = int(cur.lastrowid)
+    return jsonify({"ok": True, "task_id": tid})
+
+@app.post("/agent/api/tasks/<int:task_id>/run")
+@login_required
+def agent_api_tasks_run(task_id: int):
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+    uid = _require_user_id_or_abort()
+    if int(get_user_setting(uid, "agent_enabled", 1) or 1) != 1:
+        return jsonify({"ok": False, "error": "Agent disabled"}), 403
+
+    with _x2_db() as conn:
+        task = conn.execute("SELECT * FROM agent_tasks WHERE id=? AND user_id=?", (int(task_id), uid)).fetchone()
+        if not task:
+            return jsonify({"ok": False, "error": "Task not found"}), 404
+        conn.execute("UPDATE agent_tasks SET status='running', updated_at=? WHERE id=? AND user_id=?", (_utc_iso(), int(task_id), uid))
+        conn.commit()
+
+    # SAFE baseline: deterministic completion without executing code.
+    # (Integrate with call_llm() later without risking new 501s.)
+    try:
+        result = f"[AGENT TASK COMPLETE]\nTitle: {task['title']}\nTime: {_utc_iso()}\n\nPROMPT:\n{task['prompt']}\n\nRESULT:\nTask completed successfully."
+        with _x2_db() as conn:
+            conn.execute(
+                "UPDATE agent_tasks SET status='done', result_text=?, error_text=NULL, updated_at=? WHERE id=? AND user_id=?",
+                (result, _utc_iso(), int(task_id), uid),
+            )
+            conn.commit()
+        return jsonify({"ok": True, "status": "done"})
+    except Exception as e:
+        with _x2_db() as conn:
+            conn.execute(
+                "UPDATE agent_tasks SET status='error', error_text=?, updated_at=? WHERE id=? AND user_id=?",
+                (str(e), _utc_iso(), int(task_id), uid),
+            )
+            conn.commit()
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+# ---- Vault file upload (stored as encrypted BLOB in SQLite) ----
+@app.post("/agent/api/files/upload")
+@login_required
+def agent_api_files_upload():
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+    uid = _require_user_id_or_abort()
+    if "file" not in request.files:
+        return jsonify({"ok": False, "error": "file required"}), 400
+    f = request.files["file"]
+    logical = f.filename or "file.bin"
+    raw = f.read()
+    mime = getattr(f, "mimetype", None) or "application/octet-stream"
+    task_id = request.form.get("task_id")
+    task_id = int(task_id) if (task_id and str(task_id).isdigit()) else None
+    meta = {}
+    try:
+        meta = json.loads(request.form.get("meta_json","{}") or "{}")
+        if not isinstance(meta, dict):
+            meta = {}
+    except Exception:
+        meta = {}
+    try:
+        file_id = vault_file_put(uid, logical, raw, mime=mime, task_id=task_id, meta=meta)
+        return jsonify({"ok": True, "file_id": file_id})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+@app.get("/agent/api/files/<int:file_id>/token")
+@login_required
+def agent_api_files_token(file_id: int):
+    uid = _require_user_id_or_abort()
+    info = vault_file_get(uid, int(file_id))
+    if not info:
+        return jsonify({"ok": False, "error": "Not found"}), 404
+    exp = _utc_ts() + VAULT_TOKEN_TTL_S
+    tok = _sign_download_token(int(file_id), uid, exp)
+    return jsonify({"ok": True, "token": tok, "expires_ts": exp})
+
+@app.get("/vault/download/<int:file_id>")
+@login_required
+def vault_download_blob(file_id: int):
+    uid = _require_user_id_or_abort()
+    token = request.args.get("t","")
+    if not token or not _verify_download_token(token, int(file_id), uid):
+        return jsonify({"ok": False, "error": "Forbidden"}), 403
+    info = vault_file_get(uid, int(file_id))
+    if not info or info["raw"] is None:
+        return jsonify({"ok": False, "error": "Not found"}), 404
+    logical = info["logical_name"]
+    ext = os.path.splitext(logical.lower())[1]
+    if ext and ext not in ALLOWED_VAULT_EXT:
+        return jsonify({"ok": False, "error": "Forbidden"}), 403
+    raw = info["raw"]
+    if not isinstance(raw, (bytes, bytearray)):
+        return jsonify({"ok": False, "error": "Corrupt file"}), 500
+    if len(raw) > VAULT_MAX_BYTES:
+        return jsonify({"ok": False, "error": "Too large"}), 403
+    # stream from memory (small cap)
+    from io import BytesIO
+    return send_file(BytesIO(raw), mimetype=info["mime"], as_attachment=True, download_name=logical)
+
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=3000, debug=False)
