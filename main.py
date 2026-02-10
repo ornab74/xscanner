@@ -11797,6 +11797,13 @@ def x_settings():
     preferred_model = get_user_preferred_model(uid) or "openai"
     xai_key_env = os.getenv("XAI_API_KEY", "")
     openai_key_env = os.getenv("OPENAI_API_KEY", "")
+    if openai_key_env and not oai_key:
+        try:
+            vault_set(uid, "openai_key", openai_key_env)
+            oai_key = openai_key_env
+            logger.debug("[x_settings] uid=%s copied OPENAI_API_KEY from env into vault", uid)
+        except Exception:
+            logger.exception("[x_settings] failed copying OPENAI_API_KEY env into vault")
     xai_model_env = os.getenv("XAI_MODEL", "")
     xai_key = xai_key_env or vault_get(uid, "xai_api_key", "")
     xai_model = xai_model_env or vault_get(uid, "xai_model", "grok-2")
@@ -12505,9 +12512,17 @@ def x_api_label():
     # Read vault secrets/settings (masked values should never be stored here)
     api_key = vault_get(uid, "openai_key", "") or ""
     model = clean_text(vault_get(uid, "openai_model", X2_DEFAULT_MODEL) or X2_DEFAULT_MODEL, 128) or X2_DEFAULT_MODEL
+    env_openai_key = os.getenv("OPENAI_API_KEY") or ""
+    if (not api_key or _is_masked_secret(api_key)) and env_openai_key:
+        api_key = env_openai_key
+        try:
+            vault_set(uid, "openai_key", env_openai_key)
+            logger.debug("[x_api_label] uid=%s copied OPENAI_API_KEY from env into vault", uid)
+        except Exception:
+            logger.exception("[x_api_label] failed to persist OPENAI_API_KEY env copy")
 
     if not api_key or _is_masked_secret(api_key):
-        return jsonify({"ok": False, "error": "Missing OpenAI key in vault"}), 400
+        return jsonify({"ok": False, "error": "Missing OpenAI key (vault/env)"}), 400
 
     # Clamp batch size to avoid abuse
     try:
@@ -12517,7 +12532,7 @@ def x_api_label():
     batch = max(1, min(32, batch))
 
     # Only label unlabeled tweets for this user
-    ids = _x2_db_unlabeled_ids(uid, limit=batch)
+    ids = x2_unlabeled_ids(uid, limit=batch)
     if not ids:
         return jsonify({"ok": True, "count": 0})
 
@@ -12525,8 +12540,8 @@ def x_api_label():
     # (Assumes you have _x2_db_get_tweets_by_ids; if not, fall back below.)
     tweets_by_id = {}
     try:
-        rows = _x2_db_get_tweets_by_ids(uid, ids)  # preferred hardened path
-        tweets_by_id = {str(r.get("tid", "")): r for r in (rows or []) if r and r.get("tid")}
+        rows = _x2_db_list_tweets(uid, limit=max(400, len(ids)*3))  # bounded fallback
+        tweets_by_id = {str(r.get("tid", "")): r for r in (rows or []) if r and r.get("tid") and str(r.get("tid")) in {str(i) for i in ids}}
     except Exception:
         # fallback to prior behavior but still bounded
         tweets_by_id = {
@@ -12537,6 +12552,8 @@ def x_api_label():
 
     labeled = 0
     errors = 0
+    prev_openai_env = os.getenv("OPENAI_API_KEY")
+    os.environ["OPENAI_API_KEY"] = api_key
     try:
         scan_batch = []
         for tid in ids:
@@ -12570,8 +12587,8 @@ def x_api_label():
 
             # Label with strict error isolation per item
             try:
-                lab = x2_openai_label(api_key=api_key, model=model, tweet=t)
-                _x2_db_upsert_label(uid, tid, lab, model=model)
+                lab = x2_openai_label(t, orb={}, ceb_hint={}, model=model)
+                x2_upsert_label(uid, tid, lab, model=model)
                 labeled += 1
             except Exception:
                 errors += 1
@@ -12586,6 +12603,11 @@ def x_api_label():
         except Exception:
             pass
         return jsonify({"ok": False, "error": "Labeling failed"}), 500
+    finally:
+        if prev_openai_env is None:
+            os.environ.pop("OPENAI_API_KEY", None)
+        else:
+            os.environ["OPENAI_API_KEY"] = prev_openai_env
 
 
 @app.route("/chatbot", methods=["GET"])
@@ -12911,7 +12933,10 @@ def chatbot_console():
       }catch(e){ chatStatus.textContent = e.message; }
     });
 
-    document.getElementById('callLocalhost').onclick = async ()=>{
+    const _byId = (id)=> document.getElementById(id);
+    const _bindClick = (id, fn)=>{ const el = _byId(id); if(el){ el.onclick = fn; } };
+
+    _bindClick('callLocalhost', async ()=>{
       toolStatus.textContent = 'Fetching…';
       try{
         const url = document.getElementById('toolUrl').value || '';
@@ -12919,9 +12944,9 @@ def chatbot_console():
         toolStatus.textContent = `Status ${j.status} • ${j.bytes} bytes`;
         await refreshAgents();
       }catch(e){ toolStatus.textContent = e.message; }
-    };
+    });
 
-    document.getElementById('scanJb').onclick = async ()=>{
+    _bindClick('scanJb', async ()=>{
       toolStatus.textContent = 'Scanning…';
       try{
         const text = document.getElementById('toolText').value || '';
@@ -12929,7 +12954,7 @@ def chatbot_console():
         toolStatus.textContent = `Hits: ${j.hits.length}`;
         await refreshAgents();
       }catch(e){ toolStatus.textContent = e.message; }
-    };
+    });
 
     async function uploadZipFile(file){
       if(!file){ throw new Error('Pick a .zip file first'); }
@@ -12956,7 +12981,7 @@ def chatbot_console():
       };
     }
 
-    document.getElementById('browserTask').onclick = async ()=>{
+    _bindClick('browserTask', async ()=>{
       toolStatus.textContent = 'Queueing…';
       try{
         const url = document.getElementById('toolUrl').value || '';
@@ -12965,9 +12990,9 @@ def chatbot_console():
         await refreshHistory();
         await refreshAgents();
       }catch(e){ toolStatus.textContent = e.message; }
-    };
+    });
 
-    document.getElementById('pinAdd').onclick = async ()=>{
+    _bindClick('pinAdd', async ()=>{
       toolStatus.textContent = 'Pinning…';
       try{
         const title = document.getElementById('pinTitle').value || '';
@@ -12977,18 +13002,18 @@ def chatbot_console():
         toolStatus.textContent = 'Pin added';
         await refreshPins();
       }catch(e){ toolStatus.textContent = e.message; }
-    };
+    });
 
-    document.getElementById('pinRefresh').onclick = async ()=>{
+    _bindClick('pinRefresh', async ()=>{
       await refreshPins();
       await refreshMemory();
-    };
+    });
 
-    document.getElementById('memoryRefresh').onclick = async ()=>{
+    _bindClick('memoryRefresh', async ()=>{
       await refreshMemory();
-    };
+    });
 
-    document.getElementById('fsWrite').onclick = async ()=>{
+    _bindClick('fsWrite', async ()=>{
       toolStatus.textContent = 'Writing…';
       try{
         const path = document.getElementById('fsPath').value || 'fs://notes/plan.txt';
@@ -12997,9 +13022,9 @@ def chatbot_console():
         toolStatus.textContent = 'FS write ok';
         await refreshAgents();
       }catch(e){ toolStatus.textContent = e.message; }
-    };
+    });
 
-    document.getElementById('fsRead').onclick = async ()=>{
+    _bindClick('fsRead', async ()=>{
       toolStatus.textContent = 'Reading…';
       try{
         const path = document.getElementById('fsPath').value || 'fs://notes/plan.txt';
@@ -13008,7 +13033,7 @@ def chatbot_console():
         toolStatus.textContent = 'FS read ok';
         await refreshAgents();
       }catch(e){ toolStatus.textContent = e.message; }
-    };
+    });
 
     refreshAgents();
     refreshHistory();
@@ -13590,7 +13615,7 @@ def _restore_legacy_endpoints():
     if "admin_local_llm_page" not in app.view_functions and "admin_local_llm_page" in globals():
         _maybe_add_url_rule("/admin/local_llm", "admin_local_llm_page", globals()["admin_local_llm_page"], ("GET",))
     if "admin_local_llm_download" not in app.view_functions and "admin_local_llm_download" in globals():
-        _maybe_add_url_rule("/admin/local_llm/download", "admin_local_llm_download", globals()["admin_local_llm_download"], ("GET",))
+        _maybe_add_url_rule("/admin/local_llm/download", "admin_local_llm_download", globals()["admin_local_llm_download"], ("POST",))
     if "admin_local_llm_encrypt" not in app.view_functions and "admin_local_llm_encrypt" in globals():
         _maybe_add_url_rule("/admin/local_llm/encrypt", "admin_local_llm_encrypt", globals()["admin_local_llm_encrypt"], ("POST",))
     if "admin_local_llm_decrypt" not in app.view_functions and "admin_local_llm_decrypt" in globals():
