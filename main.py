@@ -61,6 +61,7 @@ from cryptography.hazmat.primitives.hashes import SHA3_512
 from argon2.low_level import hash_secret_raw, Type as ArgonType
 from numpy.random import Generator, PCG64DXSM
 import itertools
+from functools import wraps
 import colorsys
 import zipfile
 import io
@@ -4315,6 +4316,16 @@ def _require_user_id_or_redirect():
     if uid < 0:
         return redirect(url_for("login"))
     return uid
+
+def login_required(view_func):
+    @wraps(view_func)
+    def _wrapped(*args, **kwargs):
+        uid_or_resp = _require_user_id_or_redirect()
+        if isinstance(uid_or_resp, int):
+            return view_func(*args, **kwargs)
+        return uid_or_resp
+    return _wrapped
+
 
 def _require_user_id_or_abort() -> int:
     uid = _get_userid_or_abort()
